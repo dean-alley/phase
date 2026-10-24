@@ -4489,7 +4489,7 @@ fn ability_details(def: &AbilityDefinition) -> Vec<(String, String)> {
     // for the shapes THIS PR's lift produces — a fieldless `Effect::Investigate` whose
     // `repeat_for` is a member-count `QuantityRef` (`PlayerCount`/`ObjectCount`), i.e.
     // exactly the eligibility set of `for_each_repeatable_repeat_for`
-    // (parser/oracle_effect/mod.rs). Projecting the *whole* repeat_for surface
+    // (parser/oracle_effect/lower.rs). Projecting the *whole* repeat_for surface
     // (CopySpell/Token/Proliferate/… and pre-existing `Fixed`/`Variable`/tracked-set
     // Investigate forms) would migrate ~250 unrelated, parse-identical cards' coverage
     // signatures in one shot — a deliberate global coverage-schema migration, deferred

@@ -5413,10 +5413,11 @@ pub(super) fn strip_optional_effect_prefix(
 /// much as possible" rule. On success returns the suffix-free head; the
 /// match itself confirms the difference-repeat pattern.
 ///
-/// `strip_repeat_count_suffix` only recognizes numeric / `twice` / `three
-/// times` repeats via `parse_count_expr`, so this dedicated combinator owns
-/// the difference variant — it both detects and consumes the full suffix in
-/// one `terminated(take_until(..), tag(..))` operation.
+/// `strip_repeat_count_suffix` only peels a clause-final `twice` /
+/// `<count> times` repeat (any `parse_count_expr` count before "times"); this
+/// suffix ends in "the difference", not "times", so this dedicated combinator
+/// owns the difference variant — it both detects and consumes the full suffix
+/// in one `terminated(take_until(..), tag(..))` operation.
 pub(super) fn split_difference_repeat_suffix(text: &str) -> Option<&str> {
     const SUFFIX: &str = " a number of times equal to the difference";
     nom::sequence::terminated(take_until::<_, _, OracleError<'_>>(SUFFIX), tag(SUFFIX))
@@ -5988,11 +5989,11 @@ pub(crate) fn strip_repeat_count_suffix(text: &str) -> (Option<QuantityExpr>, St
 }
 
 /// CR 608.2c + CR 107.1: the repeat-count tail of a clause — `<count> times` or
-/// `twice`, each arm anchored at end of input. The count arm comes first so a
-/// composed "twice that many times" parses as `Multiply { 2, EventContextAmount }`
-/// before the bare "twice" arm is tried. Each arm carries its own `eof`: wrapping
-/// the `alt` in `all_consuming` would let the bare "twice" arm commit on "twice
-/// that many times" and then fail the outer end check.
+/// `twice`, each arm anchored at end of input. Each arm carries its own `eof`, so
+/// the alternatives are order-independent: the bare "twice" arm cannot succeed on
+/// the prefix of a composed "twice that many times" (which the count arm parses as
+/// `Multiply { 2, EventContextAmount }`), and `alt` never settles on a partial
+/// match that a later end check would reject.
 fn parse_repeat_count_tail(input: &str) -> OracleResult<'_, QuantityExpr> {
     alt((
         terminated(parse_count_expr_combinator, (tag("times"), eof)),
