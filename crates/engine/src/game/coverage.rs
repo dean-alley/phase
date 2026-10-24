@@ -4508,21 +4508,20 @@ fn ability_details(def: &AbilityDefinition) -> Vec<(String, String)> {
     // MUST widen in lockstep, or the new lift class becomes false-green in the
     // parse-diff.
     if let Some(rf) = &def.repeat_for {
-        let is_lift_shape = match (&*def.effect, rf) {
+        let is_lift_shape = matches!(
+            (&*def.effect, rf),
             (
                 Effect::Investigate,
                 QuantityExpr::Ref {
                     qty: QuantityRef::PlayerCount { .. } | QuantityRef::ObjectCount { .. },
                 },
-            ) => true,
-            (
+            ) | (
                 Effect::Investigate | Effect::Incubate { .. },
                 QuantityExpr::Ref {
                     qty: QuantityRef::EventContextAmount,
                 },
-            ) => true,
-            _ => false,
-        };
+            )
+        );
         if is_lift_shape {
             d.push(("repeat_for".into(), fmt_quantity(rf)));
         }
