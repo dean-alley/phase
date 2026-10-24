@@ -448,7 +448,7 @@ fn parse_control_presence_conditions(input: &str) -> OracleResult<'_, StaticCond
         parse_control_named_pair,
         parse_compound_control_presence,
         parse_filter_have_total_property,
-        // CR 508.1k + CR 509.1g + CR 118.9: "<count threshold> creature(s)
+        // CR 508.1k + CR 509.1g: "<count threshold> creature(s)
         // is/are attacking | blocking <source>" ("three or more creatures are
         // attacking", "at least one creature is blocking ~") — must precede
         // `parse_control_conditions` so the bare count phrase is not mis-read
@@ -5428,7 +5428,7 @@ fn parse_a_type_is_in_combat(input: &str) -> OracleResult<'_, StaticCondition> {
     ))
 }
 
-/// CR 508.1k + CR 509.1g + CR 118.9: Parse "<count threshold> creature(s)
+/// CR 508.1k + CR 509.1g: Parse "<count threshold> creature(s)
 /// is/are <combat state>" → `QuantityComparison(ObjectCount(creature +
 /// <combat prop>) <cmp> N)`, where the combat state is either "attacking"
 /// (`Attacking`) or "blocking it / ~ / this creature" (`BlockingSource`).

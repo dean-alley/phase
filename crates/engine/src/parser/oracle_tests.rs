@@ -1666,8 +1666,9 @@ fn parse_activation_cadence_items() {
     );
 }
 
-/// The list reproduces the existing peel order for every two-item shape that
-/// was already supported, so the card-data diff stays a clean regression probe.
+/// Parity of the overall parse for already-supported two-item shapes, whichever
+/// path each row takes (the Loch Larent row is quote-preceded and so takes the
+/// peel path, not the list), so the card-data diff stays a clean regression probe.
 #[test]
 fn compound_restriction_order_parity() {
     let cases: [(&str, &str, &[&str], Vec<ActivationRestriction>); 4] = [
