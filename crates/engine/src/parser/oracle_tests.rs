@@ -27959,6 +27959,127 @@ fn sage_eye_avengers_target_possessive_is_not_bound_to_the_event_object() {
     );
 }
 
+/// The `TargetMatchesFilter` a trailing "if its power is <threshold>" gate on a
+/// targeted trigger instruction lowers to (CR 608.2c + CR 115.1 + CR 208.1).
+fn trigger_target_power_gate(
+    comparator: Comparator,
+    value: QuantityExpr,
+) -> crate::types::ability::AbilityCondition {
+    use crate::types::ability::{FilterProp, PtStat, PtValueScope, TypedFilter};
+    crate::types::ability::AbilityCondition::TargetMatchesFilter {
+        filter: TargetFilter::Typed(TypedFilter::default().properties(vec![
+            FilterProp::PtComparison {
+                stat: PtStat::Power,
+                scope: PtValueScope::Current,
+                comparator,
+                value,
+            },
+        ])),
+        use_lki: false,
+        subject_slot: None,
+    }
+}
+
+/// CR 603.4 + CR 608.2c + CR 115.1: Sage-Eye Avengers' post-effect "if its power
+/// is less than this creature's power" is not an intervening "if": "its" names
+/// the bounce's announced target, compared with the source's power at
+/// resolution. The trigger carries no condition; the bounce carries the gate.
+#[test]
+fn sage_eye_avengers_bounce_gate_compares_target_power_with_source() {
+    let r = parse(
+        "Prowess\n\
+         Whenever this creature attacks, you may return target creature to its owner's hand if its power is less than this creature's power.",
+        "Sage-Eye Avengers",
+        &[Keyword::Prowess],
+        &["Creature"],
+        &["Djinn", "Monk"],
+    );
+    let attack = r
+        .triggers
+        .iter()
+        .find(|t| {
+            t.execute
+                .as_ref()
+                .is_some_and(|e| matches!(&*e.effect, Effect::Bounce { .. }))
+        })
+        .unwrap_or_else(|| panic!("no attack Bounce trigger parsed: {r:#?}"));
+    assert_eq!(attack.condition, None);
+    let execute = attack.execute.as_deref().expect("attack trigger body");
+    assert_eq!(
+        execute.condition,
+        Some(trigger_target_power_gate(
+            Comparator::LT,
+            QuantityExpr::Ref {
+                qty: QuantityRef::Power {
+                    scope: crate::types::ability::ObjectScope::Source,
+                },
+            },
+        ))
+    );
+    assert!(!parsed_has_unimplemented(&r), "{r:#?}");
+}
+
+/// CR 603.4 + CR 608.2c + CR 115.1: The Hippodrome's "you may destroy target
+/// creature if its power is 0 or less" gates the destroy on the chosen target's
+/// current power at resolution. It is not hoisted to a trigger condition, where
+/// "its" would bind the plane (the trigger source) instead.
+#[test]
+fn the_hippodrome_destroy_gate_binds_the_target_not_the_plane() {
+    let r = parse(
+        "All creatures get -5/-0.\n\
+         Whenever chaos ensues, you may destroy target creature if its power is 0 or less.",
+        "The Hippodrome",
+        &[],
+        &["Plane"],
+        &["Segovia"],
+    );
+    let chaos = r
+        .triggers
+        .iter()
+        .find(|t| {
+            t.execute
+                .as_ref()
+                .is_some_and(|e| matches!(&*e.effect, Effect::Destroy { .. }))
+        })
+        .unwrap_or_else(|| panic!("no chaos Destroy trigger parsed: {r:#?}"));
+    assert_eq!(chaos.condition, None);
+    let execute = chaos.execute.as_deref().expect("chaos trigger body");
+    assert_eq!(
+        execute.condition,
+        Some(trigger_target_power_gate(
+            Comparator::LE,
+            QuantityExpr::Fixed { value: 0 },
+        ))
+    );
+    assert!(!parsed_has_unimplemented(&r), "{r:#?}");
+}
+
+/// Boundary for the trailing target P/T gate: Witch-maw Nephilim's "it gains
+/// trample until end of turn if its power is 10 or greater" announces no target,
+/// so the new gate does not claim it and its body carries no
+/// `TargetMatchesFilter`. Its existing (pre-existing) hoisting is not asserted
+/// here as rules-correct.
+#[test]
+fn witch_maw_nephilim_untargeted_power_gate_is_not_a_target_gate() {
+    let r = parse(
+        "Whenever you cast a spell, you may put two +1/+1 counters on this creature.\n\
+         Whenever this creature attacks, it gains trample until end of turn if its power is 10 or greater.",
+        "Witch-maw Nephilim",
+        &[],
+        &["Creature"],
+        &["Nephilim"],
+    );
+    assert_eq!(r.triggers.len(), 2, "{r:#?}");
+    for trigger in &r.triggers {
+        let rendered = format!("{:?}", trigger.execute);
+        assert!(
+            !rendered.contains("TargetMatchesFilter"),
+            "no target gate expected: {rendered}"
+        );
+    }
+    assert!(!parsed_has_unimplemented(&r), "{r:#?}");
+}
+
 /// CR 122.1 coverage-honesty: a "put ... counters equal to the difference" whose
 /// enclosing trigger has NO "if it had <stat> greater than ~'s <stat>"
 /// comparison has nothing to bind the anaphor to. It must surface as a loud

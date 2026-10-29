@@ -29093,14 +29093,22 @@ fn suffix_power_equality_condition_preserves_pump_duration() {
         crate::types::ability::AbilityKind::Spell,
     );
     assert_eq!(def.duration, Some(Duration::UntilEndOfTurn));
-    assert!(matches!(
+    // CR 608.2c + CR 115.1: "its" names the pump's announced target (Savage Swipe).
+    assert_eq!(
         def.condition,
-        Some(AbilityCondition::QuantityCheck {
-            comparator: Comparator::EQ,
-            rhs: QuantityExpr::Fixed { value: 2 },
-            ..
+        Some(AbilityCondition::TargetMatchesFilter {
+            filter: TargetFilter::Typed(TypedFilter::default().properties(vec![
+                FilterProp::PtComparison {
+                    stat: PtStat::Power,
+                    scope: PtValueScope::Current,
+                    comparator: Comparator::EQ,
+                    value: QuantityExpr::Fixed { value: 2 },
+                },
+            ])),
+            use_lki: false,
+            subject_slot: None,
         })
-    ));
+    );
 }
 
 #[test]
@@ -64501,14 +64509,13 @@ fn tribute_world_tree_keeps_cost_paid_object_scope() {
     );
 }
 
-/// Non-regression (issue #735): Ent's Fury keeps `ObjectScope::CostPaidObject`
-/// for "if its power is 4 or greater". It is an instant with no trigger subject
-/// (None), so Edit B's `_ => CostPaidObject` fall-through binds "its" to the
-/// clause-local target — unchanged by the fix.
+/// CR 608.2c + CR 115.1 + CR 208.1: Ent's Fury's "if its power is 4 or
+/// greater" names the counter instruction's announced target ("target creature
+/// you control"), so the gate is a live `TargetMatchesFilter` on that target, not
+/// a `Power{CostPaidObject}` read — Ent's Fury pays no cost that supplies a cost
+/// object, so that read had no referent and the gate was always false.
 #[test]
-fn ents_fury_keeps_cost_paid_object_scope() {
-    use crate::types::ability::{ObjectScope, QuantityRef};
-
+fn ents_fury_counter_gate_binds_its_target() {
     let parsed = parse_oracle_text(
         "Put a +1/+1 counter on target creature you control if its power is 4 or greater. \
          Then that creature gets +1/+1 until end of turn and fights target creature you \
@@ -64522,23 +64529,206 @@ fn ents_fury_keeps_cost_paid_object_scope() {
         .abilities
         .iter()
         .find_map(|a| a.condition.clone())
-        .expect("Ent's Fury must carry a QuantityCheck condition");
+        .expect("Ent's Fury must carry a target P/T gate");
 
-    assert!(
-        matches!(
-            condition,
-            AbilityCondition::QuantityCheck {
-                lhs: QuantityExpr::Ref {
-                    qty: QuantityRef::Power {
-                        scope: ObjectScope::CostPaidObject
-                    }
-                },
-                comparator: Comparator::GE,
-                rhs: QuantityExpr::Fixed { value: 4 },
-            }
+    assert_eq!(
+        condition,
+        trailing_target_pt_gate(
+            PtStat::Power,
+            Comparator::GE,
+            QuantityExpr::Fixed { value: 4 }
         ),
-        "Ent's Fury must keep Power{{CostPaidObject}} GE 4, got {condition:?}"
     );
+    assert_no_trailing_gate_unimplemented(&parsed);
+}
+
+/// The `TargetMatchesFilter` a trailing "if its <stat> is <threshold>" gate on a
+/// targeted instruction lowers to (CR 608.2c + CR 115.1 + CR 208.1).
+fn trailing_target_pt_gate(
+    stat: PtStat,
+    comparator: Comparator,
+    value: QuantityExpr,
+) -> AbilityCondition {
+    AbilityCondition::TargetMatchesFilter {
+        filter: TargetFilter::Typed(TypedFilter::default().properties(vec![
+            FilterProp::PtComparison {
+                stat,
+                scope: PtValueScope::Current,
+                comparator,
+                value,
+            },
+        ])),
+        use_lki: false,
+        subject_slot: None,
+    }
+}
+
+/// Reach guard for the trailing-gate card tests: nothing parsed to
+/// `Effect::Unimplemented`.
+fn assert_no_trailing_gate_unimplemented(parsed: &crate::parser::oracle::ParsedAbilities) {
+    let rendered = format!("{parsed:?}");
+    assert!(
+        !rendered.contains("Unimplemented"),
+        "no Unimplemented node expected: {rendered}"
+    );
+}
+
+/// Parse a single-face spell and return its first ability's condition.
+fn trailing_gate_spell_condition(
+    oracle: &str,
+    name: &str,
+    core_type: &str,
+) -> (AbilityCondition, crate::parser::oracle::ParsedAbilities) {
+    let parsed = parse_oracle_text(oracle, name, &[], &[core_type.to_string()], &[]);
+    let condition = parsed
+        .abilities
+        .iter()
+        .find_map(|a| a.condition.clone())
+        .unwrap_or_else(|| panic!("{name} must carry a target P/T gate: {parsed:#?}"));
+    (condition, parsed)
+}
+
+/// CR 608.2c + CR 115.1 + CR 208.1: Ghastly Demise compares the target's
+/// toughness with the caster's graveyard size, read at resolution.
+#[test]
+fn ghastly_demise_gate_compares_target_toughness_with_graveyard_size() {
+    let (condition, parsed) = trailing_gate_spell_condition(
+        "Destroy target nonblack creature if its toughness is less than or equal to the number of cards in your graveyard.",
+        "Ghastly Demise",
+        "Instant",
+    );
+    assert_eq!(
+        condition,
+        trailing_target_pt_gate(
+            PtStat::Toughness,
+            Comparator::LE,
+            QuantityExpr::Ref {
+                qty: QuantityRef::GraveyardSize {
+                    player: PlayerScope::Controller,
+                },
+            },
+        )
+    );
+    assert_no_trailing_gate_unimplemented(&parsed);
+}
+
+/// CR 608.2c + CR 115.1 + CR 208.1: Unified Strike compares the target's power
+/// with the number of Soldiers on the battlefield (any controller).
+#[test]
+fn unified_strike_gate_compares_target_power_with_soldier_count() {
+    let (condition, parsed) = trailing_gate_spell_condition(
+        "Exile target attacking creature if its power is less than or equal to the number of Soldiers on the battlefield.",
+        "Unified Strike",
+        "Instant",
+    );
+    assert_eq!(
+        condition,
+        trailing_target_pt_gate(
+            PtStat::Power,
+            Comparator::LE,
+            QuantityExpr::Ref {
+                qty: QuantityRef::ObjectCount {
+                    filter: TargetFilter::Typed(TypedFilter {
+                        type_filters: vec![TypeFilter::Subtype("Soldier".to_string())],
+                        controller: None,
+                        properties: vec![],
+                    }),
+                },
+            },
+        )
+    );
+    assert_no_trailing_gate_unimplemented(&parsed);
+}
+
+/// CR 207.2c + CR 608.2c + CR 208.1: Exert Influence's converge gate compares
+/// the target's power with the colors of mana spent to cast it.
+#[test]
+fn exert_influence_gate_compares_target_power_with_converge_colors() {
+    let (condition, parsed) = trailing_gate_spell_condition(
+        "Converge — Gain control of target creature if its power is less than or equal to the number of colors of mana spent to cast this spell.",
+        "Exert Influence",
+        "Sorcery",
+    );
+    assert_eq!(
+        condition,
+        trailing_target_pt_gate(
+            PtStat::Power,
+            Comparator::LE,
+            QuantityExpr::Ref {
+                qty: QuantityRef::ManaSpentToCast {
+                    scope: CastManaObjectScope::SelfObject,
+                    metric: CastManaSpentMetric::DistinctColors,
+                },
+            },
+        )
+    );
+    assert_no_trailing_gate_unimplemented(&parsed);
+}
+
+/// CR 118.8 + CR 608.2k + CR 208.1: Titan's Presence compares the target's power
+/// with the power of the card revealed as its additional cost.
+#[test]
+fn titans_presence_gate_compares_target_power_with_revealed_card() {
+    let (condition, parsed) = trailing_gate_spell_condition(
+        "As an additional cost to cast this spell, reveal a colorless creature card from your hand.\n\
+         Exile target creature if its power is less than or equal to the revealed card's power.",
+        "Titan's Presence",
+        "Instant",
+    );
+    assert_eq!(
+        condition,
+        trailing_target_pt_gate(
+            PtStat::Power,
+            Comparator::LE,
+            QuantityExpr::Ref {
+                qty: QuantityRef::Power {
+                    scope: ObjectScope::CostPaidObject,
+                },
+            },
+        )
+    );
+    assert_no_trailing_gate_unimplemented(&parsed);
+}
+
+/// CR 118.8 + CR 608.2k + CR 208.1: Desperate Plea's first mode compares the
+/// graveyard target's power with the sacrificed creature's power; the second
+/// mode stays ungated.
+#[test]
+fn desperate_plea_mode_zero_gate_compares_target_power_with_sacrificed_creature() {
+    let parsed = parse_oracle_text(
+        "As an additional cost to cast this spell, sacrifice a creature.\n\
+         Choose one or both —\n\
+         • Return target creature card from your graveyard to the battlefield if its power is less than or equal to the sacrificed creature's power.\n\
+         • Destroy target creature.",
+        "Desperate Plea",
+        &[],
+        &["Sorcery".to_string()],
+        &["Lesson".to_string()],
+    );
+    let return_mode = parsed
+        .abilities
+        .iter()
+        .find(|a| matches!(&*a.effect, Effect::ChangeZone { .. }))
+        .unwrap_or_else(|| panic!("Desperate Plea must have a return mode: {parsed:#?}"));
+    assert_eq!(
+        return_mode.condition,
+        Some(trailing_target_pt_gate(
+            PtStat::Power,
+            Comparator::LE,
+            QuantityExpr::Ref {
+                qty: QuantityRef::Power {
+                    scope: ObjectScope::CostPaidObject,
+                },
+            },
+        ))
+    );
+    let destroy_mode = parsed
+        .abilities
+        .iter()
+        .find(|a| matches!(&*a.effect, Effect::Destroy { .. }))
+        .unwrap_or_else(|| panic!("Desperate Plea must have a destroy mode: {parsed:#?}"));
+    assert_eq!(destroy_mode.condition, None);
+    assert_no_trailing_gate_unimplemented(&parsed);
 }
 
 /// CR 508.1c + CR 611.2c: Teyo, Geometric Tactician's [−2] must lower to a

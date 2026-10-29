@@ -1,21 +1,25 @@
 //! Non-regression for issue #735 (Edit B) — cards whose "if its power is …"
-//! clause has a TARGET or ENTERING-REFERENT subject must KEEP
-//! `ObjectScope::CostPaidObject`. Edit B only flips player/phase-subject
-//! triggers (Amalia, Lily) to `Source`; everything else is unchanged, so "its"
-//! still binds the clause-local object (the entering creature / the target),
-//! not the ability source.
+//! clause has a TARGET or ENTERING-REFERENT subject must not bind "its" to the
+//! ability source. Edit B only flips player/phase-subject triggers (Amalia,
+//! Lily) to `Source`; "its" still binds the clause-local object (the entering
+//! creature / the target).
 //!
 //! Cards covered:
 //!   - Tribute to the World Tree: "Whenever a creature you control enters, draw
-//!     a card if its power is 3 or greater. …" — "its" = the ENTERING creature.
+//!     a card if its power is 3 or greater. …" — "its" = the ENTERING creature
+//!     (`ObjectScope::CostPaidObject`).
 //!   - Ent's Fury: "Put a +1/+1 counter on target creature you control if its
-//!     power is 4 or greater. …" — "its" = the TARGET creature.
+//!     power is 4 or greater. …" — "its" = the counter instruction's announced
+//!     TARGET (CR 608.2c + CR 115.1), read live by a `TargetMatchesFilter`
+//!     gate.
 //!
 //! CR references (verified against docs/MagicCompRules.txt):
 //!   - CR 608.2h: the power comparison reads the referenced object's current
 //!     info once, when the effect is applied.
 //!   - CR 608.2k: an effect referring to an untargeted object previously named
 //!     by the ability (the entering/cost-paid object) still affects that object.
+//!   - CR 608.2c + CR 115.1: "its" after a targeted instruction names that
+//!     instruction's announced target (rules of English).
 
 use engine::game::scenario::{GameRunner, GameScenario, P0, P1};
 use engine::game::triggers::{drain_order_triggers_with_identity, process_triggers};
@@ -124,22 +128,14 @@ fn tribute_entering_power_2_puts_counters_not_draw() {
     );
 }
 
-/// NON-REGRESSION (Ent's Fury): the fix must NOT perturb Ent's Fury's
-/// resolution. Its "if its power is 4 or greater" clause has no trigger subject
-/// (None), so Edit B's `_ => CostPaidObject` fall-through leaves the condition
-/// as `Power{CostPaidObject} GE 4` — exactly the pre-fix parse (locked in the
-/// parser SHAPE test `ents_fury_keeps_cost_paid_object_scope`). This runtime
-/// test proves the spell still resolves cleanly with its behavior unchanged:
-/// the pump sub-ability applies (4/4 → 5/5) and the target survives its own
-/// fight against a 3/3.
-///
-/// Note: `Power{CostPaidObject}` binds the ability's cost/sacrifice referent,
-/// not a spell's target (see `game/quantity.rs` — `CostPaidObject` is
-/// deliberately NOT a "maybe the target" fallback). So the counter clause is
-/// gated on an empty cost referent both before AND after this fix — the point
-/// of this non-regression test is that the fix changes nothing here.
+/// CR 608.2c + CR 115.1 + CR 208.1 (Ent's Fury): "its" names the counter
+/// instruction's announced target, a 4/4 ally. Its power 4 ≥ 4, so it gets the
+/// +1/+1 counter (5/5), then the unconditional +1/+1 pump (6/6), and survives
+/// fighting a 3/3. Before the fix the gate read `Power{CostPaidObject}` —
+/// Ent's Fury pays no cost that supplies a cost object, so the gate was always
+/// false and the ally ended at 5.
 #[test]
-fn ents_fury_resolves_unchanged_pump_applies() {
+fn ents_fury_counter_gate_reads_its_target() {
     let mut scenario = GameScenario::new();
     scenario.at_phase(Phase::PreCombatMain);
     // P0's own creature (the counter/pump/fight subject) at power 4.
@@ -163,17 +159,26 @@ fn ents_fury_resolves_unchanged_pump_applies() {
     // opponent (a creature you don't control).
     let outcome = runner.cast(spell).target_objects(&[ally, enemy]).resolve();
 
-    // The pump sub-ability (unconditional +1/+1 until end of turn) applies,
-    // proving Ent's Fury resolved through its chain unchanged by the fix.
+    // The gate holds on the target (power 4 ≥ 4): counter (4 → 5), then the
+    // unconditional +1/+1 pump (5 → 6).
     assert_eq!(
         outcome.state().objects[&ally].power,
-        Some(5),
-        "Ent's Fury's +1/+1 pump must still apply to the target (4 -> 5)"
+        Some(6),
+        "Ent's Fury's counter and +1/+1 pump must both apply to the target (4 -> 6)"
     );
-    // The target survives the fight (5/5 after pump vs a 3/3 dealing 3).
+    assert_eq!(
+        outcome.state().objects[&ally]
+            .counters
+            .get(&CounterType::Plus1Plus1)
+            .copied()
+            .unwrap_or(0),
+        1,
+        "the gated counter must be placed on the target"
+    );
+    // The target survives the fight (6/6 vs a 3/3 dealing 3).
     assert_eq!(
         outcome.state().objects[&ally].zone,
         Zone::Battlefield,
-        "the pumped 5/5 target survives fighting a 3/3"
+        "the 6/6 target survives fighting a 3/3"
     );
 }

@@ -1610,6 +1610,7 @@ mod top_of_library_mixed_permission;
 mod top_of_library_object_form_permission;
 mod total_war_attacking_player_scope;
 mod tracked_set_anaphor_quantity_binds;
+mod trailing_target_pt_gate;
 mod treasure_map_landmark_transform;
 mod treasured_find_regression;
 mod trespassers_curse_enchanted_player_trigger;

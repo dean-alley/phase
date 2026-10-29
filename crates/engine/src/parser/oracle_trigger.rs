@@ -12,6 +12,7 @@ use nom::Parser;
 
 use super::oracle_effect::conditions::{
     parse_phase_name_set, source_saddled_filter, split_leading_conditional,
+    trailing_its_pt_gate_binds_announced_target,
 };
 use super::oracle_effect::gap_diagnosis::clause_gap_unimplemented;
 use super::oracle_effect::{
@@ -9874,7 +9875,10 @@ enum PostEffectPolicy {
 ///   non-re-homeable, source-referential condition (e.g. Selvala, Heart of the
 ///   Wilds' "if its power is greater than each other creature's power") has no
 ///   `AbilityCondition` form, so it is hoisted to the trigger-level condition
-///   instead. Re-homeability is decided by `condition_text_is_rehomeable`.
+///   instead. Re-homeability is decided by `condition_text_is_rehomeable`,
+///   and a trailing "its power/toughness is ‹threshold›" whose "its" names the
+///   instruction's announced target (The Hippodrome) is also left in place,
+///   as decided by `trailing_its_pt_gate_binds_announced_target`.
 /// - `PostEffectPolicy::AlwaysHoist` (the `unless` path): always hoist. There
 ///   is no reachable downstream re-homer for `unless`.
 fn try_extract_spell_targets_intervening_if(
@@ -9986,8 +9990,14 @@ fn try_extract_intervening(
     if !is_leading {
         if let PostEffectPolicy::DeferIfRehomeable = policy {
             let condition_text = lower[pos + keyword.len()..].trim_end_matches('.').trim();
-            if condition_text_is_rehomeable(condition_text) {
-                // leave it for strip_suffix_conditional to re-home
+            // CR 603.4: a post-effect "if" is not an intervening "if" ("the word
+            // 'if' has only its normal English meaning anywhere else").
+            // CR 608.2c + CR 115.1: when "its" names the instruction's announced
+            // target, the effect chain owns the gate.
+            if condition_text_is_rehomeable(condition_text)
+                || trailing_its_pt_gate_binds_announced_target(&text[..pos], condition_text)
+            {
+                // leave it for the effect chain to re-home
                 return InterveningExtraction::Absent;
             }
         }

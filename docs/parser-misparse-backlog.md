@@ -3,8 +3,8 @@
 Consolidated from 50 per-batch clustering passes over the whole card database. Synonymous per-batch clusters were merged into canonical root causes, their card lists unioned and deduped, and ranked by total card appearances (largest first).
 
 - **Canonical root causes:** 29
-- **Distinct cards implicated:** 4530
-- **Total card appearances across root causes:** 4563 (a card may appear under more than one root cause when it exhibits multiple distinct misparses)
+- **Distinct cards implicated:** 4525
+- **Total card appearances across root causes:** 4558 (a card may appear under more than one root cause when it exhibits multiple distinct misparses)
 
 > Counting method: both figures count the per-root-cause card bullets only — the
 > three metadata bullets above are excluded — and are the source of truth.
@@ -16,7 +16,7 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 | # | Root cause | # cards | Fix hint (where it likely lives) |
 |---|------------|--------:|----------------------------------|
 | 1 | Relative-clause / filter restriction on target dropped | 727 | oracle_target.rs / game/filter.rs — extend TargetFilter property extraction for trailing relative clauses |
-| 2 | Dropped intervening-if / gating condition (condition: null) | 572 | oracle_nom/condition.rs parse_inner_condition — trigger/static parsers must delegate condition extraction here |
+| 2 | Dropped intervening-if / gating condition (condition: null) | 567 | oracle_nom/condition.rs parse_inner_condition — trigger/static parsers must delegate condition extraction here |
 | 3 | Anaphor bound to wrong referent | 402 | oracle_quantity.rs context-ref resolution + game/ability_utils.rs forward_result wiring |
 | 4 | Conjoined / chained second effect clause dropped | 382 | oracle.rs effect-chain composition — split on 'and'/'then'/sentence boundaries and build sub_ability chain |
 | 5 | Dropped 'for each' / dynamic count collapsed to Fixed | 329 | oracle_quantity.rs parse_for_each_clause / parse_quantity_ref — thread ForEach/ObjectCount into the effect count field |
@@ -787,7 +787,7 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 
 </details>
 
-### 2. Dropped intervening-if / gating condition (condition: null)  (572 cards)
+### 2. Dropped intervening-if / gating condition (condition: null)  (567 cards)
 
 **Signature.** Trigger/static/replacement/spell condition left null though Oracle has an 'if/while/as long as/unless' game-state gate; the effect resolves unconditionally (CR 603.4 / 608.2c).
 
@@ -912,7 +912,6 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 - Delve too Deep
 - Demonfire
 - Demonic Covenant
-- Desperate Plea
 - Development
 - Diamond Knight
 - Dimir Strandcatcher
@@ -945,7 +944,6 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 - Ethrimik, Imagined Fiend
 - Etrata, the Silencer
 - Ever-Watching Threshold
-- Exert Influence
 - Exile into Darkness
 - Extraordinary Journey
 - Faller's Faithful
@@ -988,7 +986,6 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 - Garruk's Warsteed
 - Getaway Glamer
 - Geyser Drake
-- Ghastly Demise
 - Gideon's Resolve
 - Glacial Dragonhunt
 - Glissa Sunseeker
@@ -1292,7 +1289,6 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 - Thing Swing
 - Thirsting Axe
 - Titan Hunter
-- Titan's Presence
 - Tithe
 - Tomb of Urami
 - Torch the Witness
@@ -1311,7 +1307,6 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 - Undercellar Sweep
 - Underdog Racer
 - Undersimplify
-- Unified Strike
 - Unified Will
 - Unnatural Summons
 - Unswerving Sloth

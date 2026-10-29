@@ -37,12 +37,12 @@ use crate::parser::oracle_ir::effect_chain::{
     AbilityIr, AbilityRootTransform, AbilityShellIr, EffectChainIr,
 };
 use crate::types::ability::{
-    AbilityCondition, AbilityDefinition, AbilityKind, AbilityUseTally, AdditionalCostOrigin,
-    AttachCardinality, AttachSelection, CastManaObjectScope, CastManaSpentMetric, CastVariantPaid,
-    CoinFlipResult, Comparator, ControllerRef, CostCategory, CountScope, DamageChannel, DigSource,
-    Duration, Effect, EffectOutcomeSignal, FilterProp, GuessOutcome, ObjectScope, ParsedCondition,
-    PlayerScope, PtStat, PtValueScope, QuantityExpr, QuantityRef, SharedQuality, SpentColor,
-    StaticCondition, TargetFilter, TypeFilter, TypedFilter,
+    extract_target_filter_from_effect, AbilityCondition, AbilityDefinition, AbilityKind,
+    AbilityUseTally, AdditionalCostOrigin, AttachCardinality, AttachSelection, CastManaObjectScope,
+    CastManaSpentMetric, CastVariantPaid, CoinFlipResult, Comparator, ControllerRef, CostCategory,
+    CountScope, DamageChannel, DigSource, Duration, Effect, EffectOutcomeSignal, FilterProp,
+    GuessOutcome, ObjectScope, ParsedCondition, PlayerScope, PtStat, PtValueScope, QuantityExpr,
+    QuantityRef, SharedQuality, SpentColor, StaticCondition, TargetFilter, TypeFilter, TypedFilter,
 };
 use crate::types::card_type::{CoreType, Supertype};
 use crate::types::counter::{CounterMatch, CounterType};
@@ -3049,7 +3049,7 @@ fn parse_target_pt_threshold_condition_text(text: &str) -> Option<AbilityConditi
 /// toughness is exactly N" — the possessive subject names the ability's own
 /// source (Amalia Benavides Aguirre: "destroy all other creatures if its power is
 /// exactly 20", CR 201.5). `strip_property_conditional` already owns the
-/// "N or less" / "N or greater" thresholds (`CostPaidObject` scope) and returns
+/// announced-target gate and the fixed-threshold fallback and returns
 /// None only for the equality form, so this fires SOLELY on the `exactly N`
 /// equality — the `EQ` guard makes that invariant explicit and keeps it from ever
 /// re-scoping a threshold condition a sibling stripper already owns.
@@ -3149,6 +3149,88 @@ pub(super) fn strip_turn_conditional(text: &str) -> (Option<AbilityCondition>, S
     (None, text.to_string())
 }
 
+/// CR 208.1: the possessive head of a trailing P/T gate, "its power is " /
+/// "its toughness is ", yielding the stat it compares.
+fn parse_its_pt_gate_head(input: &str) -> OracleResult<'_, PtStat> {
+    preceded(tag("its "), terminated(parse_reflexive_pt_stat, tag("is "))).parse(input)
+}
+
+/// CR 115.1: true when the instruction announces an object target — the
+/// referent a trailing "its" reads (CR 608.2c).
+///
+/// The closest authority is `effect_has_declared_target`, which is not extended:
+/// it tests `Effect::target_filter()`, which also yields non-announced typed
+/// filters (a non-target Bounce, a private-zone ChangeZone), and its `Or`-chain
+/// retarget caller depends on that breadth. This predicate instead reads
+/// `extract_target_filter_from_effect`, the stack-time target-slot authority,
+/// and excludes player targets: "its" cannot name a player.
+fn effect_announces_object_target(effect_text: &str, ctx: &ParseContext) -> bool {
+    let effect_text = effect_text.trim();
+    let lower = effect_text.to_lowercase();
+    let body = nom_on_lower(effect_text, &lower, |i| {
+        value((), opt(tag("you may "))).parse(i)
+    })
+    .map_or(effect_text, |((), rest)| rest);
+    let clause = parse_effect_clause_inner(body.trim(), &mut ctx.clone_throwaway());
+    extract_target_filter_from_effect(&clause.effect)
+        .is_some_and(|filter| !filter.is_player_scope() && !matches!(filter, TargetFilter::Any))
+}
+
+/// CR 608.2c + CR 115.1 + CR 208.1: "<targeted instruction> if its
+/// power|toughness is <threshold>" — "its" names the instruction's own
+/// announced target (rules of English, CR 608.2c), compared live at resolution
+/// (CR 608.2h); an illegal target yields no information (CR 608.2b). The
+/// threshold is the shared fixed-or-dynamic comparison authority,
+/// `parse_quantity_comparison`.
+///
+/// `condition_lower` is the lowercased condition text after " if ".
+fn parse_trailing_its_pt_target_gate(
+    effect_text: &str,
+    condition_lower: &str,
+    ctx: &ParseContext,
+) -> Option<AbilityCondition> {
+    let (rest, stat) = parse_its_pt_gate_head(condition_lower).ok()?;
+    let (comparator, value) = parse_quantity_comparison(rest.trim().trim_end_matches('.').trim())?;
+    effect_announces_object_target(effect_text, ctx).then(|| {
+        AbilityCondition::TargetMatchesFilter {
+            filter: TargetFilter::Typed(TypedFilter::default().properties(vec![
+                FilterProp::PtComparison {
+                    stat,
+                    scope: PtValueScope::Current,
+                    comparator,
+                    value,
+                },
+            ])),
+            use_lki: false,
+            subject_slot: None,
+        }
+    })
+}
+
+/// CR 603.4: a post-effect "if" has only its normal English meaning; when this
+/// gate binds the instruction's target, the trigger parser leaves it for the
+/// effect chain rather than hoisting it as an intervening-if.
+pub(crate) fn trailing_its_pt_gate_binds_announced_target(
+    effect_text: &str,
+    condition_lower: &str,
+) -> bool {
+    parse_trailing_its_pt_target_gate(effect_text, condition_lower, &ParseContext::default())
+        .is_some()
+}
+
+/// CR 608.2c: strip a trailing "if its power/toughness is <threshold>" or
+/// "if that creature was/is a <type>" property gate.
+///
+/// The "its" arm first tries the announced-target gate
+/// (`parse_trailing_its_pt_target_gate`): when the instruction announces an
+/// object target, "its" is that target and the threshold is fixed or dynamic.
+/// Otherwise (CR 608.2c + CR 608.2k + CR 208.1) "its power" binds the ability
+/// SOURCE for a player/phase-subject trigger (Amalia, Lily Bowen), or the
+/// clause-local object (CostPaidObject) for an entering-referent clause
+/// (Tribute), with a fixed threshold only. A player/phase subject ("you", "a
+/// player", any) has no clause-local object for "its" to bind, so the anaphor
+/// resolves to the ability source (CR 113.7a LKI); a typed-object subject
+/// supplies the referent the untargeted "its" reads (CR 608.2k).
 pub(super) fn strip_property_conditional(
     text: &str,
     ctx: &ParseContext,
@@ -3156,38 +3238,36 @@ pub(super) fn strip_property_conditional(
     let lower = text.to_lowercase();
     let tp = TextPair::new(text, &lower);
 
-    // CR 608.2c + CR 608.2k + CR 208.1: "its power" binds the ability SOURCE for
-    // a player/phase-subject trigger (Amalia, Lily Bowen), or the clause-local
-    // object (CostPaidObject) for a target/entering-referent clause (Tribute,
-    // Ent's Fury). A player/phase subject ("you", "a player", any) has no
-    // clause-local object for "its" to bind, so the anaphor resolves to the
-    // ability source (CR 113.7a LKI); a target/typed-object subject supplies the
-    // referent the untargeted "its" reads (CR 608.2k).
-    let scope = match ctx.subject {
-        Some(TargetFilter::Controller) | Some(TargetFilter::Player) | Some(TargetFilter::Any) => {
-            ObjectScope::Source
+    if let Some(if_pos) = find_trailing_condition_start(&lower) {
+        let (body, _) = tp.split_at(if_pos);
+        let condition = lower[if_pos + " if ".len()..].trim_end_matches('.').trim();
+        // CR 608.2c + CR 115.1: announced target — fixed or dynamic threshold.
+        if let Some(gate) = parse_trailing_its_pt_target_gate(body.original, condition, ctx) {
+            return (Some(gate), body.original.to_string());
         }
-        _ => ObjectScope::CostPaidObject,
-    };
-
-    for (property, qty_ref) in &[
-        ("power", QuantityRef::Power { scope }),
-        ("toughness", QuantityRef::Toughness { scope }),
-    ] {
-        let pattern = format!(" if its {property} is ");
-        if let Some((before, after)) = tp.rsplit_around(&pattern) {
-            let after = after.lower.trim_end_matches('.');
-
-            if let Some((comparator, value)) = parse_comparison_suffix(after) {
+        // CR 608.2k + CR 113.7a: no announced target — scope from the subject,
+        // fixed threshold only.
+        if let Ok((rest, stat)) = parse_its_pt_gate_head(condition) {
+            if let Some((comparator, value)) = parse_comparison_suffix(rest) {
+                let scope = match ctx.subject {
+                    Some(TargetFilter::Controller)
+                    | Some(TargetFilter::Player)
+                    | Some(TargetFilter::Any) => ObjectScope::Source,
+                    _ => ObjectScope::CostPaidObject,
+                };
+                let qty = match stat {
+                    PtStat::Power => QuantityRef::Power { scope },
+                    PtStat::Toughness => QuantityRef::Toughness { scope },
+                    // `parse_reflexive_pt_stat` never yields it.
+                    PtStat::TotalPowerToughness => return (None, text.to_string()),
+                };
                 return (
                     Some(AbilityCondition::QuantityCheck {
-                        lhs: QuantityExpr::Ref {
-                            qty: qty_ref.clone(),
-                        },
+                        lhs: QuantityExpr::Ref { qty },
                         comparator,
                         rhs: QuantityExpr::Fixed { value },
                     }),
-                    before.original.to_string(),
+                    body.original.to_string(),
                 );
             }
         }
@@ -4469,6 +4549,9 @@ fn top_level_if_positions(text: &str) -> Vec<usize> {
 /// conditions ("its power is", "it has", ...) and reflexive cost/choice
 /// predicates ("able", "you do", "possible") have no `AbilityCondition` form;
 /// such a post-effect `if` must hoist to `TriggerDefinition.condition` instead.
+/// The trigger hoist yields for the "its power/toughness is " prefixes when
+/// `trailing_its_pt_gate_binds_announced_target` holds: there "its" names the
+/// instruction's announced target and the effect chain owns the gate.
 const NON_REHOMEABLE_CONDITION_PREFIXES: &[&str] = &[
     "able",
     "you do",
@@ -4807,6 +4890,8 @@ fn effect_target_filter(effect_text: &str, ctx: &ParseContext) -> Option<TargetF
     clause.effect.target_filter().cloned()
 }
 
+/// Shared "‹comparator› ‹quantity›" right-hand side (fixed or dynamic), consumed
+/// by the generic "X is ‹comparison›" condition and `parse_trailing_its_pt_target_gate`.
 pub(super) fn parse_quantity_comparison(text: &str) -> Option<(Comparator, QuantityExpr)> {
     type E<'a> = OracleError<'a>;
     let mut comparator_prefixes = alt((
@@ -14893,5 +14978,414 @@ mod tests {
             }),
             None
         );
+    }
+
+    /// The target-gate `PtComparison` built for "its <stat> is <threshold>".
+    fn target_pt_gate(
+        stat: PtStat,
+        comparator: Comparator,
+        value: QuantityExpr,
+    ) -> AbilityCondition {
+        AbilityCondition::TargetMatchesFilter {
+            filter: TargetFilter::Typed(TypedFilter::default().properties(vec![
+                FilterProp::PtComparison {
+                    stat,
+                    scope: PtValueScope::Current,
+                    comparator,
+                    value,
+                },
+            ])),
+            use_lki: false,
+            subject_slot: None,
+        }
+    }
+
+    fn quantity_ref(qty: QuantityRef) -> QuantityExpr {
+        QuantityExpr::Ref { qty }
+    }
+
+    fn cost_paid_power() -> QuantityExpr {
+        quantity_ref(QuantityRef::Power {
+            scope: ObjectScope::CostPaidObject,
+        })
+    }
+
+    fn typed_creature_ctx() -> ParseContext {
+        ParseContext {
+            subject: Some(TargetFilter::Typed(TypedFilter::creature())),
+            ..Default::default()
+        }
+    }
+
+    /// CR 208.1 + CR 608.2c: `parse_quantity_comparison` is the single
+    /// right-hand-side authority for the trailing target P/T gate. These are the
+    /// exact `(Comparator, QuantityExpr)` shapes it yields for the class phrases
+    /// (fixed and dynamic), plus an unparseable "your team" quantity (CR 102.4)
+    /// that must stay `None` so the gate falls back to base behavior.
+    #[test]
+    fn quantity_comparison_yields_target_pt_gate_threshold_shapes() {
+        let cases = [
+            (
+                "less than or equal to the number of cards in your graveyard",
+                Comparator::LE,
+                quantity_ref(QuantityRef::GraveyardSize {
+                    player: PlayerScope::Controller,
+                }),
+            ),
+            (
+                "less than or equal to the number of soldiers on the battlefield",
+                Comparator::LE,
+                quantity_ref(QuantityRef::ObjectCount {
+                    filter: TargetFilter::Typed(TypedFilter {
+                        type_filters: vec![TypeFilter::Subtype("Soldier".to_string())],
+                        controller: None,
+                        properties: vec![],
+                    }),
+                }),
+            ),
+            (
+                "less than or equal to the number of colors of mana spent to cast this spell",
+                Comparator::LE,
+                quantity_ref(QuantityRef::ManaSpentToCast {
+                    scope: CastManaObjectScope::SelfObject,
+                    metric: CastManaSpentMetric::DistinctColors,
+                }),
+            ),
+            (
+                "less than or equal to the number of colors of mana spent to cast ~",
+                Comparator::LE,
+                quantity_ref(QuantityRef::ManaSpentToCast {
+                    scope: CastManaObjectScope::SelfObject,
+                    metric: CastManaSpentMetric::DistinctColors,
+                }),
+            ),
+            (
+                "less than or equal to the revealed card's power",
+                Comparator::LE,
+                cost_paid_power(),
+            ),
+            (
+                "less than or equal to the sacrificed creature's power",
+                Comparator::LE,
+                cost_paid_power(),
+            ),
+            (
+                "less than ~'s power",
+                Comparator::LT,
+                quantity_ref(QuantityRef::Power {
+                    scope: ObjectScope::Source,
+                }),
+            ),
+            (
+                "less than this creature's power",
+                Comparator::LT,
+                quantity_ref(QuantityRef::Power {
+                    scope: ObjectScope::Source,
+                }),
+            ),
+            (
+                "greater than the number of cards in your hand",
+                Comparator::GT,
+                quantity_ref(QuantityRef::HandSize {
+                    player: PlayerScope::Controller,
+                }),
+            ),
+            ("2", Comparator::EQ, QuantityExpr::Fixed { value: 2 }),
+            (
+                "4 or greater",
+                Comparator::GE,
+                QuantityExpr::Fixed { value: 4 },
+            ),
+            (
+                "0 or less",
+                Comparator::LE,
+                QuantityExpr::Fixed { value: 0 },
+            ),
+            (
+                "2 or less",
+                Comparator::LE,
+                QuantityExpr::Fixed { value: 2 },
+            ),
+            (
+                "exactly 20",
+                Comparator::EQ,
+                QuantityExpr::Fixed { value: 20 },
+            ),
+        ];
+        for (text, comparator, value) in cases {
+            assert_eq!(
+                parse_quantity_comparison(text),
+                Some((comparator, value)),
+                "{text}"
+            );
+        }
+        // CR 102.4: no team-scoped object count exists; the comparison must not
+        // collapse "your team" to "you". Reach guard: the first case above.
+        assert_eq!(
+            parse_quantity_comparison(
+                "less than or equal to the number of warriors your team controls"
+            ),
+            None
+        );
+    }
+
+    /// CR 608.2c + CR 115.1 + CR 208.1: a trailing "if its power/toughness is
+    /// <dynamic quantity>" on a targeted instruction binds the announced target
+    /// and keeps the dynamic right-hand side (Ghastly Demise, Unified Strike,
+    /// Exert Influence, Titan's Presence, Desperate Plea, Sage-Eye Avengers).
+    #[test]
+    fn trailing_its_pt_gate_binds_announced_target_with_dynamic_threshold() {
+        let cases = [
+            (
+                "Destroy target nonblack creature if its toughness is less than or equal to the number of cards in your graveyard.",
+                "Destroy target nonblack creature",
+                target_pt_gate(
+                    PtStat::Toughness,
+                    Comparator::LE,
+                    quantity_ref(QuantityRef::GraveyardSize {
+                        player: PlayerScope::Controller,
+                    }),
+                ),
+            ),
+            (
+                "Exile target attacking creature if its power is less than or equal to the number of Soldiers on the battlefield.",
+                "Exile target attacking creature",
+                target_pt_gate(
+                    PtStat::Power,
+                    Comparator::LE,
+                    quantity_ref(QuantityRef::ObjectCount {
+                        filter: TargetFilter::Typed(TypedFilter {
+                            type_filters: vec![TypeFilter::Subtype("Soldier".to_string())],
+                            controller: None,
+                            properties: vec![],
+                        }),
+                    }),
+                ),
+            ),
+            (
+                "Gain control of target creature if its power is less than or equal to the number of colors of mana spent to cast this spell.",
+                "Gain control of target creature",
+                target_pt_gate(
+                    PtStat::Power,
+                    Comparator::LE,
+                    quantity_ref(QuantityRef::ManaSpentToCast {
+                        scope: CastManaObjectScope::SelfObject,
+                        metric: CastManaSpentMetric::DistinctColors,
+                    }),
+                ),
+            ),
+            (
+                "Exile target creature if its power is less than or equal to the revealed card's power.",
+                "Exile target creature",
+                target_pt_gate(PtStat::Power, Comparator::LE, cost_paid_power()),
+            ),
+            (
+                "Return target creature card from your graveyard to the battlefield if its power is less than or equal to the sacrificed creature's power.",
+                "Return target creature card from your graveyard to the battlefield",
+                target_pt_gate(PtStat::Power, Comparator::LE, cost_paid_power()),
+            ),
+            (
+                "return target creature to its owner's hand if its power is less than ~'s power",
+                "return target creature to its owner's hand",
+                target_pt_gate(
+                    PtStat::Power,
+                    Comparator::LT,
+                    quantity_ref(QuantityRef::Power {
+                        scope: ObjectScope::Source,
+                    }),
+                ),
+            ),
+        ];
+        for (text, body, gate) in cases {
+            assert_eq!(
+                strip_property_conditional(text, &ParseContext::default()),
+                (Some(gate), body.to_string()),
+                "{text}"
+            );
+        }
+    }
+
+    /// CR 608.2c + CR 115.1 + CR 208.1: fixed thresholds on a targeted
+    /// instruction bind the announced target too (Ent's Fury, Savage Swipe,
+    /// Welcome to the Fold), including under a player/any subject (The
+    /// Hippodrome), where the legacy fallback would bind the source.
+    #[test]
+    fn trailing_its_pt_gate_binds_announced_target_with_fixed_threshold() {
+        let fixed = |value| QuantityExpr::Fixed { value };
+        let cases = [
+            (
+                "Put a +1/+1 counter on target creature you control if its power is 4 or greater",
+                "Put a +1/+1 counter on target creature you control",
+                target_pt_gate(PtStat::Power, Comparator::GE, fixed(4)),
+            ),
+            (
+                "Target creature you control gets +2/+2 until end of turn if its power is 2",
+                "Target creature you control gets +2/+2 until end of turn",
+                target_pt_gate(PtStat::Power, Comparator::EQ, fixed(2)),
+            ),
+            (
+                "Gain control of target creature if its toughness is 2 or less",
+                "Gain control of target creature",
+                target_pt_gate(PtStat::Toughness, Comparator::LE, fixed(2)),
+            ),
+            (
+                "Destroy target creature if its power is exactly 20",
+                "Destroy target creature",
+                target_pt_gate(PtStat::Power, Comparator::EQ, fixed(20)),
+            ),
+        ];
+        for (text, body, gate) in cases {
+            assert_eq!(
+                strip_property_conditional(text, &ParseContext::default()),
+                (Some(gate), body.to_string()),
+                "{text}"
+            );
+        }
+        let any_subject = ParseContext {
+            subject: Some(TargetFilter::Any),
+            ..Default::default()
+        };
+        assert_eq!(
+            strip_property_conditional(
+                "destroy target creature if its power is 0 or less",
+                &any_subject
+            ),
+            (
+                Some(target_pt_gate(PtStat::Power, Comparator::LE, fixed(0))),
+                "destroy target creature".to_string()
+            )
+        );
+    }
+
+    /// CR 608.2k + CR 113.7a: with no announced target, "its" keeps its legacy
+    /// binding — the clause-local cost/entering object for a typed subject
+    /// (Tribute to the World Tree), the source for a player subject (Lily Bowen,
+    /// Amalia) — with a fixed threshold only.
+    #[test]
+    fn trailing_its_pt_gate_without_announced_target_keeps_legacy_scope() {
+        let check = |qty, comparator, value| AbilityCondition::QuantityCheck {
+            lhs: QuantityExpr::Ref { qty },
+            comparator,
+            rhs: QuantityExpr::Fixed { value },
+        };
+        let controller = ParseContext {
+            subject: Some(TargetFilter::Controller),
+            ..Default::default()
+        };
+        assert_eq!(
+            strip_property_conditional(
+                "draw a card if its power is 3 or greater",
+                &typed_creature_ctx()
+            ),
+            (
+                Some(check(
+                    QuantityRef::Power {
+                        scope: ObjectScope::CostPaidObject
+                    },
+                    Comparator::GE,
+                    3
+                )),
+                "draw a card".to_string()
+            )
+        );
+        assert_eq!(
+            strip_property_conditional(
+                "double the number of +1/+1 counters on ~ if its power is 16 or less",
+                &controller
+            ),
+            (
+                Some(check(
+                    QuantityRef::Power {
+                        scope: ObjectScope::Source
+                    },
+                    Comparator::LE,
+                    16
+                )),
+                "double the number of +1/+1 counters on ~".to_string()
+            )
+        );
+        assert_eq!(
+            strip_property_conditional(
+                "destroy all other creatures if its power is exactly 20",
+                &controller
+            ),
+            (
+                Some(check(
+                    QuantityRef::Power {
+                        scope: ObjectScope::Source
+                    },
+                    Comparator::EQ,
+                    20
+                )),
+                "destroy all other creatures".to_string()
+            )
+        );
+    }
+
+    /// Negatives: a dynamic threshold with no announced target, and an
+    /// unparseable right-hand side, fall back to base behavior (no condition).
+    /// Each is paired with a same-shape positive reach guard.
+    #[test]
+    fn trailing_its_pt_gate_declines_without_target_or_parseable_threshold() {
+        // "that creature" is a context reference, not an announced target.
+        let text = "put a +1/+1 counter on that creature if its power is less than ~'s power";
+        assert_eq!(
+            strip_property_conditional(text, &typed_creature_ctx()),
+            (None, text.to_string())
+        );
+        // Reach guard: the same body with a fixed threshold takes the legacy branch.
+        assert!(matches!(
+            strip_property_conditional(
+                "put a +1/+1 counter on that creature if its power is 2 or less",
+                &typed_creature_ctx()
+            ),
+            (
+                Some(AbilityCondition::QuantityCheck {
+                    lhs: QuantityExpr::Ref {
+                        qty: QuantityRef::Power {
+                            scope: ObjectScope::CostPaidObject
+                        }
+                    },
+                    comparator: Comparator::LE,
+                    rhs: QuantityExpr::Fixed { value: 2 },
+                }),
+                _
+            )
+        ));
+
+        // No target: a dynamic threshold has no legacy (fixed-only) form.
+        // Reach guard: `trailing_its_pt_gate_without_announced_target_keeps_legacy_scope`.
+        let text =
+            "draw a card if its power is less than or equal to the number of cards in your hand";
+        assert_eq!(
+            strip_property_conditional(text, &ParseContext::default()),
+            (None, text.to_string())
+        );
+
+        // CR 102.4: unparseable team-scoped quantity. Reach guard: the Ghastly
+        // Demise row of the dynamic-threshold test.
+        let text = "destroy target creature if its power is less than or equal to the number of Warriors your team controls";
+        assert_eq!(
+            strip_property_conditional(text, &ParseContext::default()),
+            (None, text.to_string())
+        );
+    }
+
+    /// CR 603.4: the trigger hoist yields only when the post-effect "if its
+    /// power/toughness" gate binds the instruction's announced target.
+    #[test]
+    fn trailing_its_pt_gate_trigger_predicate_requires_announced_target() {
+        assert!(trailing_its_pt_gate_binds_announced_target(
+            "you may destroy target creature ",
+            "its power is 0 or less"
+        ));
+        assert!(!trailing_its_pt_gate_binds_announced_target(
+            "it gains trample until end of turn ",
+            "its power is 10 or greater"
+        ));
+        assert!(!trailing_its_pt_gate_binds_announced_target(
+            "draw a card ",
+            "its power is 3 or greater"
+        ));
     }
 }
