@@ -5,7 +5,9 @@
 //! (Ghastly Demise, Desperate Plea, Titan's Presence, Sage-Eye Avengers), bound
 //! to the trigger SOURCE when hoisted as an intervening "if" (The Hippodrome),
 //! or read an absent cost object (Ent's Fury). Every row below drives the real
-//! cast / trigger pipeline and asserts both sides of the gate.
+//! cast / trigger pipeline; each card's two gate sides are asserted here,
+//! except Ent's Fury, whose gate-holds side is
+//! issue_735_cost_paid_object_non_regression.rs.
 //!
 //! CR references (verified against docs/MagicCompRules.txt):
 //!   - CR 608.2c: instructions are followed in order, applying the rules of

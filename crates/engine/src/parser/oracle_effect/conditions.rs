@@ -4568,7 +4568,9 @@ const NON_REHOMEABLE_CONDITION_PREFIXES: &[&str] = &[
     "you cast it from",
 ];
 
-/// Single authority for the hoist-vs-rehome decision (CR 603.4). `true` if the
+/// Authority for whether `strip_suffix_conditional` can re-home a post-effect
+/// condition (CR 603.4); the trigger hoist in `try_extract_intervening` also
+/// yields when `trailing_its_pt_gate_binds_announced_target` holds. `true` if the
 /// (lowercased, trimmed) condition fragment after `" if "` can be re-homed by
 /// `strip_suffix_conditional` as a clause-level `AbilityCondition`.
 pub(crate) fn condition_text_is_rehomeable(condition_text: &str) -> bool {
