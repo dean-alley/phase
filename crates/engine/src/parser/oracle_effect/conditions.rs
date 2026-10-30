@@ -3048,10 +3048,11 @@ fn parse_target_pt_threshold_condition_text(text: &str) -> Option<AbilityConditi
 /// CR 201.5 + CR 208.1 + CR 608.2c: source-referential "if its/her/his power or
 /// toughness is exactly N" — the possessive subject names the ability's own
 /// source (Amalia Benavides Aguirre: "destroy all other creatures if its power is
-/// exactly 20", CR 201.5). `strip_property_conditional` already owns the
-/// announced-target gate and the fixed-threshold fallback and returns
-/// None only for the equality form, so this fires SOLELY on the `exactly N`
-/// equality — the `EQ` guard makes that invariant explicit and keeps it from ever
+/// exactly 20", CR 201.5). `strip_property_conditional` owns the trailing "its"
+/// form (the announced-target gate for any threshold, and the untargeted
+/// fixed-threshold fallback, equality included); this fires only on an
+/// `exactly N` equality that reaches it (e.g. a "her/his" possessive) —
+/// the `EQ` guard makes that invariant explicit and keeps it from ever
 /// re-scoping a threshold condition a sibling stripper already owns.
 fn parse_source_pt_comparison_condition_text(text: &str) -> Option<AbilityCondition> {
     let lower = text.trim().trim_end_matches('.').to_ascii_lowercase();

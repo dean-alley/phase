@@ -45,7 +45,7 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 | 30 | Token/named-card name corrupted by normalization or overrun | 7 | oracle_util.rs SELF_REF normalization + Named-filter parsing — guard literal 'named X' spans |
 | 31 | Other / uncategorized misparse | 4 | manual triage |
 
-> The top **5** root causes cover 2412/4563 ≈ 53% of all misparse appearances; the top 10 cover 3399/4563 ≈ 74.5%. Fix these first. Row order is the original ranking; row 7 has since dropped below row 8 as cards were fixed.
+> The top **5** root causes cover 2407/4558 ≈ 53% of all misparse appearances; the top 10 cover 3394/4558 ≈ 74.5%. Fix these first. Row order is the original ranking; row 7 has since dropped below row 8 as cards were fixed.
 
 ## Full card lists per root cause
 
