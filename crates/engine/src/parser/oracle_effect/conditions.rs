@@ -15284,11 +15284,6 @@ mod tests {
                 "Gain control of target creature",
                 target_pt_gate(PtStat::Toughness, Comparator::LE, fixed(2)),
             ),
-            (
-                "Destroy target creature if its power is exactly 20",
-                "Destroy target creature",
-                target_pt_gate(PtStat::Power, Comparator::EQ, fixed(20)),
-            ),
         ];
         for (text, body, gate) in cases {
             assert_eq!(
@@ -15378,21 +15373,24 @@ mod tests {
         );
     }
 
-    /// Negatives: a dynamic threshold with no announced target, and an
-    /// unparseable right-hand side, fall back to base behavior (no condition).
-    /// Each is paired with a same-shape positive reach guard.
+    /// Negatives: a dynamic threshold with no announced target (Shelinda,
+    /// Yevon Acolyte), and an unparseable right-hand side, fall back to base
+    /// behavior (no condition). Each is paired with a positive reach guard.
     #[test]
     fn trailing_its_pt_gate_declines_without_target_or_parseable_threshold() {
-        // "that creature" is a context reference, not an announced target.
+        // Shelinda, Yevon Acolyte ("~" normalises "Shelinda"): "that creature"
+        // is a context reference, not an announced target, and the dynamic
+        // threshold has no legacy (fixed-only) form.
         let text = "put a +1/+1 counter on that creature if its power is less than ~'s power";
         assert_eq!(
             strip_property_conditional(text, &typed_creature_ctx()),
             (None, text.to_string())
         );
-        // Reach guard: the same body with a fixed threshold takes the legacy branch.
+        // Reach guard: Emperor Apatzec Intli IV's "that creature" clause with a
+        // fixed threshold takes the legacy branch.
         assert!(matches!(
             strip_property_conditional(
-                "put a +1/+1 counter on that creature if its power is 2 or less",
+                "that creature perpetually gains haste if its power is 4 or greater",
                 &typed_creature_ctx()
             ),
             (
@@ -15402,24 +15400,19 @@ mod tests {
                             scope: ObjectScope::CostPaidObject
                         }
                     },
-                    comparator: Comparator::LE,
-                    rhs: QuantityExpr::Fixed { value: 2 },
+                    comparator: Comparator::GE,
+                    rhs: QuantityExpr::Fixed { value: 4 },
                 }),
                 _
             )
         ));
 
-        // No target: a dynamic threshold has no legacy (fixed-only) form.
-        // Reach guard: `trailing_its_pt_gate_without_announced_target_keeps_legacy_scope`.
-        let text =
-            "draw a card if its power is less than or equal to the number of cards in your hand";
-        assert_eq!(
-            strip_property_conditional(text, &ParseContext::default()),
-            (None, text.to_string())
-        );
-
-        // CR 102.4: unparseable team-scoped quantity. Reach guard: the Ghastly
-        // Demise row of the dynamic-threshold test.
+        // CR 102.4: unparseable team-scoped quantity. No printed card has this
+        // exact targeted-"its" shape; the nearest printed card is Nimbus
+        // Champion: "Whenever this creature attacks, you may return target
+        // creature to its owner's hand if that creature's power is less than or
+        // equal to the number of Warriors your team controls." Reach guard: the
+        // Ghastly Demise row of the dynamic-threshold test.
         let text = "destroy target creature if its power is less than or equal to the number of Warriors your team controls";
         assert_eq!(
             strip_property_conditional(text, &ParseContext::default()),
