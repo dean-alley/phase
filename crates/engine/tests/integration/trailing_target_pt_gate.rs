@@ -2,7 +2,8 @@
 //! power/toughness is <threshold>", where the threshold is fixed or dynamic.
 //!
 //! Before the fix the trailing gate was dropped when its threshold was dynamic
-//! (Ghastly Demise, Desperate Plea, Titan's Presence, Sage-Eye Avengers), bound
+//! (Ghastly Demise, Desperate Plea, Titan's Presence, Sage-Eye Avengers, Exert
+//! Influence), bound
 //! to the trigger SOURCE when hoisted as an intervening "if" (The Hippodrome),
 //! or read an absent cost object (Ent's Fury). Every row below drives the real
 //! cast / trigger pipeline; each card's two gate sides are asserted here,
@@ -35,8 +36,9 @@ use engine::types::actions::GameAction;
 use engine::types::events::GameEvent;
 use engine::types::game_state::WaitingFor;
 use engine::types::identifiers::ObjectId;
-use engine::types::mana::ManaCost;
+use engine::types::mana::{ManaCost, ManaCostShard, ManaType, ManaUnit};
 use engine::types::phase::Phase;
+use engine::types::player::PlayerId;
 use engine::types::zones::Zone;
 
 use super::rules::AttackTarget;
@@ -53,6 +55,8 @@ const SAGE_EYE_TRIGGER_ORACLE: &str = "Whenever this creature attacks, you may r
 const DESPERATE_PLEA_ORACLE: &str = "As an additional cost to cast this spell, sacrifice a creature.\nChoose one or both —\n• Return target creature card from your graveyard to the battlefield if its power is less than or equal to the sacrificed creature's power.\n• Destroy target creature.";
 
 const TITANS_PRESENCE_ORACLE: &str = "As an additional cost to cast this spell, reveal a colorless creature card from your hand.\nExile target creature if its power is less than or equal to the revealed card's power.";
+
+const EXERT_INFLUENCE_ORACLE: &str = "Converge — Gain control of target creature if its power is less than or equal to the number of colors of mana spent to cast this spell.";
 
 const HIPPODROME_ORACLE: &str = "All creatures get -5/-0.\nWhenever chaos ensues, you may destroy target creature if its power is 0 or less.";
 
@@ -390,6 +394,109 @@ fn titans_presence_spares_target_with_power_above_the_revealed_card() {
     assert_eq!(target, Zone::Battlefield);
     assert_eq!(revealed, Zone::Hand, "revealing keeps the card in hand");
     assert!(settled);
+}
+
+// ---------------------------------------------------------------------------
+// Exert Influence — dynamic threshold: colors of mana spent to cast it.
+// ---------------------------------------------------------------------------
+
+/// What an Exert Influence cast observed.
+struct ExertInfluenceCast {
+    colors_spent_on_stack: usize,
+    target_controller: PlayerId,
+    spell_zone: Zone,
+    pool_left: usize,
+    settled: bool,
+}
+
+/// Casts Exert Influence ({4}{U}) against a P1 creature of `target_power`,
+/// paying from a pool of one blue and four red mana — two distinct colors spent
+/// (CR 601.2h; converge is an ability word, CR 207.2c).
+fn exert_influence_cast(target_power: i32) -> ExertInfluenceCast {
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::PreCombatMain);
+    let spell = scenario
+        .add_spell_to_hand_from_oracle(P0, "Exert Influence", false, EXERT_INFLUENCE_ORACLE)
+        .with_mana_cost(ManaCost::Cost {
+            shards: vec![ManaCostShard::Blue],
+            generic: 4,
+        })
+        .id();
+    let target = scenario
+        .add_creature(P1, "Target", target_power, target_power)
+        .id();
+    let mut runner = scenario.build();
+
+    let pool = &mut runner
+        .state_mut()
+        .players
+        .iter_mut()
+        .find(|p| p.id == P0)
+        .expect("P0 exists")
+        .mana_pool;
+    for mana in [
+        ManaType::Blue,
+        ManaType::Red,
+        ManaType::Red,
+        ManaType::Red,
+        ManaType::Red,
+    ] {
+        pool.add(ManaUnit::new(mana, ObjectId(0), false, vec![]));
+    }
+
+    let commit = runner.cast(spell).target_objects(&[target]).commit();
+    let colors_spent_on_stack = commit.state().objects[&spell]
+        .colors_spent_to_cast
+        .distinct_colors();
+    let outcome = commit.resolve();
+    let state = outcome.state();
+    let pool_left = state
+        .players
+        .iter()
+        .find(|p| p.id == P0)
+        .expect("P0 exists")
+        .mana_pool
+        .units()
+        .count();
+    ExertInfluenceCast {
+        colors_spent_on_stack,
+        target_controller: state.objects[&target].controller,
+        spell_zone: outcome.zone_of(spell),
+        pool_left,
+        settled: state.stack.is_empty()
+            && matches!(outcome.final_waiting_for(), WaitingFor::Priority { .. }),
+    }
+}
+
+/// CR 608.2c + CR 208.1 + CR 613.1b: target power 2 ≤ two colors spent — the
+/// caster gains control of the target.
+#[test]
+fn exert_influence_takes_target_with_power_at_most_colors_spent() {
+    let cast = exert_influence_cast(2);
+    assert_eq!(
+        cast.colors_spent_on_stack, 2,
+        "precondition: blue and red were spent to cast the spell"
+    );
+    assert_eq!(cast.pool_left, 0, "the full {{4}}{{U}} cost was paid");
+    assert_eq!(cast.target_controller, P0);
+    assert_eq!(cast.spell_zone, Zone::Graveyard);
+    assert!(cast.settled);
+}
+
+/// CR 608.2c + CR 208.1: target power 3 > two colors spent — control does not
+/// change. Reverting the fix drops the gate and the caster gains control.
+#[test]
+fn exert_influence_leaves_target_with_power_above_colors_spent() {
+    let cast = exert_influence_cast(3);
+    assert_eq!(
+        cast.colors_spent_on_stack, 2,
+        "precondition: blue and red were spent to cast the spell"
+    );
+    assert_eq!(cast.pool_left, 0, "the full {{4}}{{U}} cost was paid");
+    assert_eq!(cast.target_controller, P1);
+    // Reach guard: the spell resolved (CR 608.2n) rather than stalling.
+    assert_eq!(cast.spell_zone, Zone::Graveyard);
+    assert!(cast.settled);
 }
 
 // ---------------------------------------------------------------------------

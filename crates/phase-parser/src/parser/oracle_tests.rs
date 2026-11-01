@@ -27871,9 +27871,12 @@ fn the_hippodrome_destroy_gate_binds_the_target_not_the_plane() {
 
 /// Boundary for the trailing target P/T gate: Witch-maw Nephilim's "it gains
 /// trample until end of turn if its power is 10 or greater" announces no target,
-/// so the new gate does not claim it and its body carries no
-/// `TargetMatchesFilter`. Its existing (pre-existing) hoisting is not asserted
-/// here as rules-correct.
+/// so the new gate does not claim it and no ability in either trigger's body
+/// carries a `TargetMatchesFilter` condition. The positive reach-guard pins
+/// where the gate does land today — the attack trigger's source-power
+/// `QuantityComparison` — proving the "if its power" clause was parsed rather
+/// than dropped. That hoisting is pre-existing behavior and is pinned here only
+/// as the current parse, not asserted as rules-correct.
 #[test]
 fn witch_maw_nephilim_untargeted_power_gate_is_not_a_target_gate() {
     let r = parse(
@@ -27885,12 +27888,43 @@ fn witch_maw_nephilim_untargeted_power_gate_is_not_a_target_gate() {
         &["Nephilim"],
     );
     assert_eq!(r.triggers.len(), 2, "{r:#?}");
+
+    // Positive reach-guard: the attack trigger's "if its power is 10 or greater"
+    // is parsed, as a source-power comparison on the trigger.
+    let attack = r
+        .triggers
+        .iter()
+        .find(|t| t.mode == TriggerMode::Attacks)
+        .unwrap_or_else(|| panic!("no attack trigger parsed: {r:#?}"));
+    assert_eq!(
+        attack.condition,
+        Some(TriggerCondition::QuantityComparison {
+            lhs: QuantityExpr::Ref {
+                qty: QuantityRef::Power {
+                    scope: ObjectScope::Source,
+                },
+            },
+            comparator: Comparator::GE,
+            rhs: QuantityExpr::Fixed { value: 10 },
+        }),
+        "{attack:#?}"
+    );
+    assert!(attack.execute.is_some(), "{attack:#?}");
+
+    // Negative: no ability in either trigger's body is gated on a target.
     for trigger in &r.triggers {
-        let rendered = format!("{:?}", trigger.execute);
-        assert!(
-            !rendered.contains("TargetMatchesFilter"),
-            "no target gate expected: {rendered}"
-        );
+        let mut pending: Vec<&AbilityDefinition> = trigger.execute.as_deref().into_iter().collect();
+        while let Some(ability) = pending.pop() {
+            assert!(
+                !matches!(
+                    ability.condition,
+                    Some(AbilityCondition::TargetMatchesFilter { .. })
+                ),
+                "no target gate expected: {ability:#?}"
+            );
+            pending.extend(ability.sub_ability.as_deref());
+            pending.extend(ability.else_ability.as_deref());
+        }
     }
     assert!(!parsed_has_unimplemented(&r), "{r:#?}");
 }

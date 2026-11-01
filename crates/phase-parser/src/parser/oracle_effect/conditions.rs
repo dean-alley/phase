@@ -2950,11 +2950,8 @@ fn parse_reflexive_object_property(input: &str) -> OracleResult<'_, FilterProp> 
         // CR 208.1: "power/toughness N or less/greater" (Driftgloom Coyote).
         map(
             (parse_reflexive_pt_stat, parse_or_threshold),
-            |(stat, (comparator, value))| FilterProp::PtComparison {
-                stat,
-                scope: PtValueScope::Current,
-                comparator,
-                value: QuantityExpr::Fixed { value },
+            |(stat, (comparator, value))| {
+                current_pt_comparison(stat, comparator, QuantityExpr::Fixed { value })
             },
         ),
     ))
@@ -3064,22 +3061,51 @@ fn parse_target_pt_threshold_condition(
         preceded(tag(" has "), parse_reflexive_pt_stat),
     ))
     .parse(rest)?;
+    // Fixed thresholds only, deliberately. The one printed card whose
+    // demonstrative target gate compares against a dynamic quantity is Nimbus
+    // Champion ("...if that creature's power is less than or equal to the number
+    // of Warriors your team controls."), and its team-scoped count (CR 102.4:
+    // "your team" means you and/or your teammates) has no quantity yet. A dynamic
+    // threshold here would gain no card and risk mis-scoping that one. (Pelt
+    // Collector and Yorvo compare a triggering creature, not a target, and are
+    // owned by the trigger parser.)
     let (rest, (comparator, value)) = parse_threshold_with_exactly(rest)?;
     Ok((
         rest,
-        AbilityCondition::TargetMatchesFilter {
-            filter: TargetFilter::Typed(TypedFilter::default().properties(vec![
-                FilterProp::PtComparison {
-                    stat,
-                    scope: PtValueScope::Current,
-                    comparator,
-                    value: QuantityExpr::Fixed { value },
-                },
-            ])),
-            use_lki: false,
-            subject_slot: None,
-        },
+        target_current_pt_condition(stat, comparator, QuantityExpr::Fixed { value }),
     ))
+}
+
+/// CR 208.1: a comparison against an object's current power or toughness — the
+/// single constructor for the live (`PtValueScope::Current`) `PtComparison`
+/// predicate shared by every P/T gate in this module.
+fn current_pt_comparison(stat: PtStat, comparator: Comparator, value: QuantityExpr) -> FilterProp {
+    FilterProp::PtComparison {
+        stat,
+        scope: PtValueScope::Current,
+        comparator,
+        value,
+    }
+}
+
+/// CR 115.1 + CR 608.2c + CR 208.1: the condition "the earlier instruction's
+/// announced target has <stat> <comparator> <value>", tested against the
+/// target's current power or toughness, read live at resolution (CR 608.2h) —
+/// hence `use_lki: false`. The single constructor for the target P/T gate shared
+/// by the demonstrative ("that creature's power is N") and trailing "its"
+/// ("if its power is N") surface forms.
+fn target_current_pt_condition(
+    stat: PtStat,
+    comparator: Comparator,
+    value: QuantityExpr,
+) -> AbilityCondition {
+    AbilityCondition::TargetMatchesFilter {
+        filter: TargetFilter::Typed(
+            TypedFilter::default().properties(vec![current_pt_comparison(stat, comparator, value)]),
+        ),
+        use_lki: false,
+        subject_slot: None,
+    }
 }
 
 fn parse_target_pt_threshold_condition_text(text: &str) -> Option<AbilityCondition> {
@@ -3238,20 +3264,8 @@ fn parse_trailing_its_pt_target_gate(
 ) -> Option<AbilityCondition> {
     let (rest, stat) = parse_its_pt_gate_head(condition_lower).ok()?;
     let (comparator, value) = parse_quantity_comparison(rest.trim().trim_end_matches('.').trim())?;
-    effect_announces_object_target(effect_text, ctx).then(|| {
-        AbilityCondition::TargetMatchesFilter {
-            filter: TargetFilter::Typed(TypedFilter::default().properties(vec![
-                FilterProp::PtComparison {
-                    stat,
-                    scope: PtValueScope::Current,
-                    comparator,
-                    value,
-                },
-            ])),
-            use_lki: false,
-            subject_slot: None,
-        }
-    })
+    effect_announces_object_target(effect_text, ctx)
+        .then(|| target_current_pt_condition(stat, comparator, value))
 }
 
 /// CR 603.4: a post-effect "if" has only its normal English meaning; when this
@@ -8510,12 +8524,7 @@ fn parse_cost_paid_object_possessive_pt_comparison(lower: &str) -> Option<Abilit
 
     Some(AbilityCondition::CostPaidObjectMatchesFilter {
         filter: TargetFilter::Typed(TypedFilter::new(noun_filter).properties(vec![
-            FilterProp::PtComparison {
-                stat,
-                scope: PtValueScope::Current,
-                comparator,
-                value: QuantityExpr::Fixed { value },
-            },
+            current_pt_comparison(stat, comparator, QuantityExpr::Fixed { value }),
         ])),
     })
 }
