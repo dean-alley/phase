@@ -3421,7 +3421,8 @@ Trample";
         }
 
         // Synthetic: no printed card puts a rules-term label on a self casting-option
-        // line. CR 207.2c only lets an ability word or flavor word be read past.
+        // line; the nearest printed card is Admiral's Order, whose "Raid —" ability-word label
+        // sits on the same frame. CR 207.2c only lets an ability word or flavor word be read past.
         assert_eq!(
             parse_spell_casting_option_line(
                 "Flashback — If you attacked this turn, you may pay {U} rather than pay this spell's mana cost.",
@@ -3503,7 +3504,8 @@ Trample";
                 "Enolc, Perfect Clone",
             ),
             // Synthetic: no printed card puts a rules-term label on a self casting-option
-            // line; CR 207.2c only lets an ability word or flavor word be read past.
+            // line; the nearest printed card is Admiral's Order ("Raid — If you attacked this turn, …").
+            // CR 207.2c only lets an ability word or flavor word be read past.
             (
                 "Flashback — If you attacked this turn, you may pay {U} rather than pay this spell's mana cost.",
                 "Test Card",
@@ -3518,7 +3520,9 @@ Trample";
 
     /// CR 118.9: the "it" arm of the self subject must not commit on a card name that
     /// merely begins with "it". Synthetic: no printed card whose name begins with "it"
-    /// prints a self casting-option frame naming itself.
+    /// prints a self casting-option frame naming itself (Itzquinth's name is borrowed only for
+    /// its leading "it"; this is not its Oracle text). The nearest printed card is Shove Aside:
+    /// "If you aren't the starting player, you may cast Shove Aside as though it had flash."
     #[test]
     fn you_may_cast_self_respects_word_boundary() {
         let name = "Itzquinth, Firstborn of Gishath";
