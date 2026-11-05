@@ -104,6 +104,7 @@ mod security_bypass_attacking_alone;
 mod selenia_vigilance_grant;
 mod selesnya_loft_gardens_mixed_mana_choice;
 mod self_attached_aura_token_host;
+mod self_casting_option_frame;
 mod self_copy_last_known_values;
 mod self_destruct_target_power;
 mod self_exile_at_resolution_8721;

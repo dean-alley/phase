@@ -27,28 +27,34 @@ use crate::types::mana::ManaColor;
 /// `parse_additional_cost_line` reads a cost after.
 const THIS_SPELL_ADDITIONAL_COST_PREFIX: &str = "as an additional cost to cast this spell, ";
 
+/// CR 207.2c + CR 207.2d: the text after an ability-word or flavor-word label
+/// on a self casting-cost line (additional cost, alternative cost, casting
+/// permission); a label naming a rules term, or a Saga chapter (CR 714.2b), is
+/// not read past. Returns `None` when `line` has no such label.
+/// A label is read past only when `label_names_rules_term` finds no keyword
+/// term in it and the line is not a Saga chapter line. The label is not
+/// word-capped: each caller re-validates the remainder against its own frame,
+/// which is what tells a label from an ordinary em-dash sentence (see
+/// `FLAVOR_WORD_COST_LABEL_MAX_WORDS`).
+fn read_past_self_cost_line_label(line: &str) -> Option<&str> {
+    let (label, rest) = split_short_label_prefix(line, FLAVOR_WORD_COST_LABEL_MAX_WORDS)?;
+    (!is_saga_chapter(&line.to_lowercase()) && !label_names_rules_term(&label.to_lowercase()))
+        .then_some(rest)
+}
+
 /// CR 118.8 + CR 207.2c + CR 207.2d: The text of an "As an additional cost …"
 /// line, or `None` when the line is not one. A label before a cost on this
 /// spell is read past only when it is an ability word or flavor word
-/// (CR 207.2c, CR 207.2d): `label_names_rules_term` finds no keyword term in
-/// it, and the line is not a Saga chapter line (CR 714.2b).
-/// The label is not word-capped: the remainder is re-validated by the
-/// additional-cost opener itself, which is what tells a label from an
-/// ordinary em-dash sentence (see `FLAVOR_WORD_COST_LABEL_MAX_WORDS`).
+/// (`read_past_self_cost_line_label`).
 pub fn additional_cost_line_text(line: &str) -> Option<&str> {
     const OPENER: &str = "as an additional cost";
     if lower_starts_with(&line.to_lowercase(), OPENER) {
         return Some(line);
     }
-    let (label, rest) = split_short_label_prefix(line, FLAVOR_WORD_COST_LABEL_MAX_WORDS)?;
+    let rest = read_past_self_cost_line_label(line)?;
     // CR 118.8: after a label, only a cost on this spell is read; a labeled line that imposes a
     // cost on other spells is left to the later line parsers.
-    // CR 207.2c + CR 207.2d: only an ability word or flavor word is read past. A label that
-    // names a rules term, or a Saga chapter (CR 714.2b), keeps the line on its own route.
-    (lower_starts_with(&rest.to_lowercase(), THIS_SPELL_ADDITIONAL_COST_PREFIX)
-        && !is_saga_chapter(&line.to_lowercase())
-        && !label_names_rules_term(&label.to_lowercase()))
-    .then_some(rest)
+    lower_starts_with(&rest.to_lowercase(), THIS_SPELL_ADDITIONAL_COST_PREFIX).then_some(rest)
 }
 
 /// Split a combined additional-cost line from its trailing self-spell cost
@@ -237,10 +243,25 @@ fn is_choose_behold_prefix(body_lower: &str) -> bool {
     parse(body_lower).is_ok()
 }
 
-pub fn parse_spell_casting_option_line(text: &str, card_name: &str) -> Option<SpellCastingOption> {
+/// CR 118.9 + CR 207.2c: the frame text of a self casting-option line — the
+/// optional leading "if" condition and the primary option sentence — read past
+/// an ability-word or flavor-word label (`read_past_self_cost_line_label`).
+/// `parse_spell_casting_option_line` and `is_self_casting_option_line` both
+/// frame the line here, so the option parser and the gap recognizer cannot
+/// disagree about where the option body is.
+fn self_casting_option_text(text: &str) -> (Option<&str>, &str) {
     let trimmed = text.trim().trim_end_matches('.');
-    let (condition, body) = split_leading_if_clause(trimmed);
-    let primary_body = body.split_once(". ").map_or(body, |(head, _)| head).trim();
+    let (condition, body) =
+        split_leading_if_clause(read_past_self_cost_line_label(trimmed).unwrap_or(trimmed));
+    let primary_body = take_until::<_, _, OracleError<'_>>(". ")
+        .parse(body)
+        .map_or(body, |(_, head)| head)
+        .trim();
+    (condition, primary_body)
+}
+
+pub fn parse_spell_casting_option_line(text: &str, card_name: &str) -> Option<SpellCastingOption> {
+    let (condition, primary_body) = self_casting_option_text(text);
     let body_lower = primary_body.to_lowercase();
 
     parse_self_flash_option(primary_body, &body_lower, card_name)
@@ -518,26 +539,53 @@ fn extract_rather_than_pay_alt_cost<'a>(
     Some((cost_text, trailing_if))
 }
 
-fn self_spell_phrase(lower: &str, card_name: &str) -> Option<String> {
-    let card_name_lower = card_name.to_lowercase();
-    if let Ok((_, phrase)) = alt((
-        value(
-            "this spell",
-            tag::<_, _, OracleError<'_>>("you may cast this spell "),
-        ),
-        value("it", tag("you may cast it ")),
-    ))
-    .parse(lower)
-    {
-        return Some(phrase.to_string());
-    }
-    // Dynamic card name prefix — must use strip_prefix (runtime string)
-    let card_prefix = format!("you may cast {card_name_lower} ");
-    if lower.strip_prefix(&*card_prefix).is_some() {
-        return Some(card_name_lower);
-    }
+/// CR 118.9 "[this object]": the self subject of a casting-option frame
+/// ("you may cast <self> "), returning the matched subject phrase. `~` is the
+/// normalized spelling of "this creature" and the card name
+/// (`SELF_REF_TYPE_PHRASES`); the raw card name is matched too. The trailing
+/// space sits inside each arm so "it" never commits on a word that merely
+/// begins with "it".
+fn parse_you_may_cast_self<'a>(input: &'a str, card_name_lower: &str) -> OracleResult<'a, &'a str> {
+    preceded(
+        tag("you may cast "),
+        alt((
+            terminated(tag("this spell"), tag(" ")),
+            terminated(tag("it"), tag(" ")),
+            terminated(tag("~"), tag(" ")),
+            terminated(tag(card_name_lower), tag(" ")),
+        )),
+    )
+    .parse(input)
+}
 
-    None
+fn self_spell_phrase(lower: &str, card_name: &str) -> Option<String> {
+    parse_you_may_cast_self(lower, &card_name.to_lowercase())
+        .ok()
+        .map(|(_, phrase)| phrase.to_string())
+}
+
+/// CR 118.9 + CR 601.3d: whether `text` is printed in a self casting-option
+/// frame (alternative cost, free cast, cast-for, flash permission), optionally
+/// behind an ability or flavor word, whether or not
+/// `parse_spell_casting_option_line` can represent it. Such a line permits
+/// casting; it is never a spell-resolution instruction, so a rejected one must
+/// end as an honest gap.
+pub(crate) fn is_self_casting_option_line(text: &str, card_name: &str) -> bool {
+    let (_, body) = self_casting_option_text(text);
+    let lower = body.to_lowercase();
+    let card_name_lower = card_name.to_lowercase();
+    extract_rather_than_pay_alt_cost(body, &lower).is_some()
+        || nom_primitives::parse_self_spell_has_flash_prefix(&lower).is_ok()
+        || preceded(
+            |i| parse_you_may_cast_self(i, &card_name_lower),
+            alt((
+                tag::<_, _, OracleError<'_>>("without paying its mana cost"),
+                tag("as though it had flash"),
+                tag("for "),
+            )),
+        )
+        .parse(lower.as_str())
+        .is_ok()
 }
 
 fn parse_mana_color_connector(input: &str) -> OracleResult<'_, &str> {
@@ -3259,5 +3307,228 @@ Trample";
                 ],
             }))
         );
+    }
+
+    /// CR 118.9 + CR 207.2c: the ability word "Raid" has no rules meaning, so
+    /// Admiral's Order's labeled line is a conditional {U} alternative cost.
+    #[test]
+    fn labeled_alternative_cost_line_is_a_casting_option() {
+        let option = parse_spell_casting_option_line(
+            "Raid — If you attacked this turn, you may pay {U} rather than pay this spell's mana cost.",
+            "Admiral's Order",
+        )
+        .expect("a labeled alternative-cost line should parse");
+        match option {
+            SpellCastingOption {
+                kind: crate::types::ability::SpellCastingOptionKind::AlternativeCost,
+                cost:
+                    Some(AbilityCost::Mana {
+                        cost:
+                            ManaCost::Cost {
+                                generic: 0,
+                                ref shards,
+                            },
+                    }),
+                condition:
+                    Some(ParsedCondition::QuantityComparison {
+                        lhs:
+                            QuantityExpr::Ref {
+                                qty:
+                                    QuantityRef::AttackedThisTurn {
+                                        scope: CountScope::Controller,
+                                        filter: None,
+                                    },
+                            },
+                        comparator: Comparator::GE,
+                        rhs: QuantityExpr::Fixed { value: 1 },
+                    }),
+            } if *shards == [crate::types::mana::ManaCostShard::Blue] => {}
+            other => panic!("expected a raid-gated {{U}} alternative cost, got {other:?}"),
+        }
+    }
+
+    /// CR 601.3d + CR 207.2c: an ability-word label in front of a conditional
+    /// flash permission is read past (Swift Reckoning's spell mastery, Dragon
+    /// Grip's ferocious). A label naming a rules term is not.
+    #[test]
+    fn labeled_flash_permission_line_is_a_casting_option() {
+        let swift = parse_spell_casting_option_line(
+            "Spell mastery — If there are two or more instant and/or sorcery cards in your graveyard, you may cast this spell as though it had flash. (You may cast it any time you could cast an instant.)",
+            "Swift Reckoning",
+        )
+        .expect("Swift Reckoning's labeled flash permission should parse");
+        match swift {
+            SpellCastingOption {
+                kind: crate::types::ability::SpellCastingOptionKind::AsThoughHadFlash,
+                cost: None,
+                condition:
+                    Some(ParsedCondition::QuantityComparison {
+                        lhs:
+                            QuantityExpr::Ref {
+                                qty:
+                                    QuantityRef::ZoneCardCount {
+                                        zone: crate::types::ability::ZoneRef::Graveyard,
+                                        ref card_types,
+                                        scope: CountScope::Controller,
+                                        ..
+                                    },
+                            },
+                        comparator: Comparator::GE,
+                        rhs: QuantityExpr::Fixed { value: 2 },
+                    }),
+            } if *card_types == [TypeFilter::Instant, TypeFilter::Sorcery] => {}
+            other => panic!("expected a spell-mastery-gated flash permission, got {other:?}"),
+        }
+
+        let grip = parse_spell_casting_option_line(
+            "Ferocious — If you control a creature with power 4 or greater, you may cast this spell as though it had flash. (You may cast it any time you could cast an instant.)",
+            "Dragon Grip",
+        )
+        .expect("Dragon Grip's labeled flash permission should parse");
+        match grip {
+            SpellCastingOption {
+                kind: crate::types::ability::SpellCastingOptionKind::AsThoughHadFlash,
+                cost: None,
+                condition:
+                    Some(ParsedCondition::QuantityComparison {
+                        lhs:
+                            QuantityExpr::Ref {
+                                qty:
+                                    QuantityRef::ObjectCount {
+                                        filter: TargetFilter::Typed(ref typed),
+                                    },
+                            },
+                        comparator: Comparator::GE,
+                        rhs: QuantityExpr::Fixed { value: 1 },
+                    }),
+            } => {
+                assert!(typed.type_filters.contains(&TypeFilter::Creature));
+                assert_eq!(typed.controller, Some(ControllerRef::You));
+                assert!(
+                    typed.properties.iter().any(|prop| matches!(
+                        prop,
+                        FilterProp::PtComparison {
+                            stat: crate::types::ability::PtStat::Power,
+                            comparator: Comparator::GE,
+                            value: QuantityExpr::Fixed { value: 4 },
+                            ..
+                        }
+                    )),
+                    "expected a power >= 4 filter, got {typed:?}"
+                );
+            }
+            other => panic!("expected a ferocious-gated flash permission, got {other:?}"),
+        }
+
+        // Synthetic: no printed card puts a rules-term label on a self casting-option
+        // line. CR 207.2c only lets an ability word or flavor word be read past.
+        assert_eq!(
+            parse_spell_casting_option_line(
+                "Flashback — If you attacked this turn, you may pay {U} rather than pay this spell's mana cost.",
+                "Test Card",
+            ),
+            None
+        );
+    }
+
+    /// CR 118.9 + CR 601.3d: the self casting-option frame is recognized whether or
+    /// not its option is representable (lines in their normalized `~` form).
+    #[test]
+    fn self_casting_option_frame_is_recognized_whether_or_not_representable() {
+        for (line, card_name) in [
+            (
+                "Raid — If you attacked this turn, you may pay {U} rather than pay this spell's mana cost.",
+                "Admiral's Order",
+            ),
+            (
+                "If a creature spell you cast this turn was countered by a spell or ability an opponent controlled, you may pay {0} rather than pay this spell's mana cost.",
+                "Summoning Trap",
+            ),
+            (
+                "If you've been dealt damage by two or more creatures this turn, you may pay {R} rather than pay this spell's mana cost.",
+                "Inferno Trap",
+            ),
+            (
+                "If a noncreature permanent under your control was destroyed this turn by a spell or ability an opponent controlled, you may pay {G} rather than pay this spell's mana cost.",
+                "Cobra Trap",
+            ),
+            (
+                "If you control two or more white permanents that share an artist, you may cast this spell without paying its mana cost.",
+                "Erase (Not the Urza's Legacy One)",
+            ),
+            (
+                "If you control two or more green permanents that share an artist, you may cast this spell without paying its mana cost.",
+                "Remodel",
+            ),
+            (
+                "If a creature is attacking you and you control a Forest and a Plains, you may cast ~ without paying its mana cost and as though it had flash.",
+                "Qasali Ambusher",
+            ),
+            (
+                "You may cast this spell as though it had flash if it's cast using teamwork.",
+                "Quantum Reduction",
+            ),
+            (
+                "You may cast this spell as though it had flash if X is 3 or less.",
+                "Silver Scrutiny",
+            ),
+            (
+                "If you aren't the starting player, you may cast ~ as though it had flash.",
+                "Shove Aside",
+            ),
+        ] {
+            assert!(
+                is_self_casting_option_line(line, card_name),
+                "expected a self casting-option frame: {line}"
+            );
+        }
+    }
+
+    /// Lines that permit casting other spells, restrict casting, or cast a card in a
+    /// different frame are not self casting-option frames.
+    #[test]
+    fn self_casting_option_frame_rejects_non_frames() {
+        for (line, card_name) in [
+            (
+                "You may cast spells from the top of your library by sacrificing a nonland permanent in addition to paying their other costs.",
+                "Into the Pit",
+            ),
+            ("Cast this spell only during combat.", "Angelic Favor"),
+            (
+                "You may cast Throat Wolf during an opponent's combat phase.",
+                "Throat Wolf",
+            ),
+            (
+                "If Enolc isn't a commander, you may cast it as though it was a copy of any of your commanders.",
+                "Enolc, Perfect Clone",
+            ),
+            // Synthetic: no printed card puts a rules-term label on a self casting-option
+            // line; CR 207.2c only lets an ability word or flavor word be read past.
+            (
+                "Flashback — If you attacked this turn, you may pay {U} rather than pay this spell's mana cost.",
+                "Test Card",
+            ),
+        ] {
+            assert!(
+                !is_self_casting_option_line(line, card_name),
+                "expected no self casting-option frame: {line}"
+            );
+        }
+    }
+
+    /// CR 118.9: the "it" arm of the self subject must not commit on a card name that
+    /// merely begins with "it". Synthetic: no printed card whose name begins with "it"
+    /// prints a self casting-option frame naming itself.
+    #[test]
+    fn you_may_cast_self_respects_word_boundary() {
+        let name = "Itzquinth, Firstborn of Gishath";
+        let line = "You may cast Itzquinth, Firstborn of Gishath without paying its mana cost.";
+        assert_eq!(
+            parse_you_may_cast_self(&line.to_lowercase(), &name.to_lowercase())
+                .map(|(_, phrase)| phrase.to_string())
+                .ok(),
+            Some(name.to_lowercase())
+        );
+        assert!(is_self_casting_option_line(line, name));
     }
 }

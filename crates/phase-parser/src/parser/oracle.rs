@@ -52,8 +52,8 @@ use super::oracle_nom::primitives::{
 use super::oracle_attraction::parse_attraction_visit_triggers;
 use super::oracle_casting::{
     additional_cost_line_text, extract_spend_only_on_x_prefix, is_cast_this_spell_only_line,
-    parse_additional_cost_line, parse_casting_restriction_line, parse_spell_casting_option_line,
-    split_additional_cost_trailing_spell_reduction,
+    is_self_casting_option_line, parse_additional_cost_line, parse_casting_restriction_line,
+    parse_spell_casting_option_line, split_additional_cost_trailing_spell_reduction,
 };
 use super::oracle_class::parse_class_oracle_text;
 use super::oracle_classifier::{
@@ -4059,11 +4059,12 @@ fn is_spell_resolution_instruction_line(
         }
     }
 
-    // CR 601.3: a "Cast this spell only …" line is a casting restriction even when its
-    // condition is unrecognized; it ends the spell body and is recorded on its own.
+    // CR 601.3 + CR 118.9: a casting restriction or a self casting-option line, even an
+    // unrepresentable one, ends the spell body.
     if parse_casting_restriction_line(line).is_some()
         || parse_spell_casting_option_line(line, card_name).is_some()
         || is_cast_this_spell_only_line(line)
+        || is_self_casting_option_line(line, card_name)
     {
         return false;
     }
@@ -8293,6 +8294,23 @@ fn parse_normalized_oracle_ir(
 
         if let Some(option) = parse_spell_casting_option_line(&line, card_name) {
             emitter.casting_option_at(item_line, option);
+            i += 1;
+            continue;
+        }
+
+        // CR 118.9 + CR 601.3d: a self casting-option line whose option could not be represented
+        // (unrecognized condition, unmodeled tail) still only permits casting; record it as an
+        // `Effect::unimplemented` gap rather than let the spell-imperative route read it as a
+        // resolution `PayCost` / `CastFromZone` that drops the permission's terms.
+        if is_self_casting_option_line(&line, card_name) {
+            emitter.ability_at(
+                item_line,
+                AbilityDefinition::new(
+                    AbilityKind::Spell,
+                    Effect::unimplemented("casting_option", &line),
+                )
+                .description(line.clone()),
+            );
             i += 1;
             continue;
         }

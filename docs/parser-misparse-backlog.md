@@ -3,8 +3,8 @@
 Consolidated from 50 per-batch clustering passes over the whole card database. Synonymous per-batch clusters were merged into canonical root causes, their card lists unioned and deduped, and ranked by total card appearances (largest first).
 
 - **Canonical root causes:** 29
-- **Distinct cards implicated:** 4511
-- **Total card appearances across root causes:** 4544 (a card may appear under more than one root cause when it exhibits multiple distinct misparses)
+- **Distinct cards implicated:** 4506
+- **Total card appearances across root causes:** 4539 (a card may appear under more than one root cause when it exhibits multiple distinct misparses)
 
 > Counting method: both figures count the per-root-cause card bullets only — the
 > three metadata bullets above are excluded — and are the source of truth.
@@ -16,18 +16,18 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 | # | Root cause | # cards | Fix hint (where it likely lives) |
 |---|------------|--------:|----------------------------------|
 | 1 | Relative-clause / filter restriction on target dropped | 724 | oracle_target.rs / game/filter.rs — extend TargetFilter property extraction for trailing relative clauses |
-| 2 | Dropped intervening-if / gating condition (condition: null) | 570 | oracle_nom/condition.rs parse_inner_condition — trigger/static parsers must delegate condition extraction here |
+| 2 | Dropped intervening-if / gating condition (condition: null) | 569 | oracle_nom/condition.rs parse_inner_condition — trigger/static parsers must delegate condition extraction here |
 | 3 | Anaphor bound to wrong referent | 401 | oracle_quantity.rs context-ref resolution + game/ability_utils.rs forward_result wiring |
 | 4 | Conjoined / chained second effect clause dropped | 380 | oracle.rs effect-chain composition — split on 'and'/'then'/sentence boundaries and build sub_ability chain |
 | 5 | Dropped 'for each' / dynamic count collapsed to Fixed | 327 | oracle_quantity.rs parse_for_each_clause / parse_quantity_ref — thread ForEach/ObjectCount into the effect count field |
 | 6 | Disjunctive (or-list) collapsed to first branch | 225 | oracle_nom/filter.rs + oracle_target.rs — build TargetFilter::Or across all alt() branches |
-| 7 | Wrong / dropped zone parameters on zone-change effect | 207 | game/zones.rs + oracle parser zone routing — derive correct origin/destination/owner from Oracle |
-| 8 | Additional / alternative casting cost dropped | 208 | oracle_cost.rs — parse additional/alternative cost clauses into Spell.cost / AdditionalCost |
+| 7 | Wrong / dropped zone parameters on zone-change effect | 205 | game/zones.rs + oracle parser zone routing — derive correct origin/destination/owner from Oracle |
+| 8 | Additional / alternative casting cost dropped | 207 | oracle_cost.rs — parse additional/alternative cost clauses into Spell.cost / AdditionalCost |
 | 9 | Wrong player/controller scope (You where Opponent/Scoped/Target/Defending needed) | 178 | oracle parser ControllerRef binding — resolve scoped/defending/iterated player refs instead of defaulting to You |
 | 10 | Trigger event/mode unrecognized → Unknown | 164 | oracle_trigger.rs — add typed TriggerMode variants for the unrecognized event classes |
 | 11 | Replacement / prevention / 'instead' effect mis-modeled | 151 | add-replacement-effect: route 'would … instead' into replacements[]; preserve damage_source/target filters |
 | 12 | Modal 'choose one/N' parsed as independent abilities | 132 | oracle.rs modal dispatch — detect 'Choose one —' header, wrap modes in Effect::ChooseOneOf |
-| 13 | State/game-state condition → StaticCondition::Unrecognized | 127 | oracle_nom/condition.rs parse_inner_condition — add typed variant for the predicate class |
+| 13 | State/game-state condition → StaticCondition::Unrecognized | 126 | oracle_nom/condition.rs parse_inner_condition — add typed variant for the predicate class |
 | 14 | Granted/quoted ability or continuous modification dropped | 94 | oracle_static.rs continuous-modification extraction — emit all conjuncts incl. GrantAbility/GrantKeyword |
 | 15 | Multi-target / 'up to N' optionality or count dropped | 80 | parser/oracle_effect/lower.rs `apply_optional_target_fixup` + `imperative.rs` Attach host capture — preserve MultiTargetSpec / optional_targeting; lift the detector exclusions (DealDamage, Transform, Any-target, Token, Counter, MoveCounters, BecomeCopy, CopySpell) as each resolver grows a declined-target no-op |
 | 16 | Keyword payload / multiplicity / mis-tokenization | 82 | game/keywords.rs + oracle keyword parsing — use typed discriminants and guard ability-word labels |
@@ -784,7 +784,7 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 
 </details>
 
-### 2. Dropped intervening-if / gating condition (condition: null)  (570 cards)
+### 2. Dropped intervening-if / gating condition (condition: null)  (569 cards)
 
 **Signature.** Trigger/static/replacement/spell condition left null though Oracle has an 'if/while/as long as/unless' game-state gate; the effect resolves unconditionally (CR 603.4 / 608.2c).
 
@@ -1175,7 +1175,6 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 - Prompto Argentum
 - Prowling Geistcatcher
 - Pulse of the Hunter Maze
-- Qasali Ambusher
 - Quest for the Nihil Stone
 - Quicksilver Servitor
 - Quilled Charger
@@ -2743,7 +2742,7 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 
 </details>
 
-### 7. Wrong / dropped zone parameters on zone-change effect  (207 cards)
+### 7. Wrong / dropped zone parameters on zone-change effect  (205 cards)
 
 **Signature.** ChangeZone/ChangeZoneAll/Dig uses the wrong origin/destination zone, drops a count, inverts hand↔library, defaults origin to Exile, or omits a graveyard/owner-library routing.
 
@@ -2905,8 +2904,6 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 - Seek Thrills
 - Selective Memory
 - Shigeki, Jukai Visionary
-- Shove Aside
-- Silver Scrutiny
 - Skywarp Skaab
 - Slithering Cryptid
 - Sol'Kanar the Tainted
@@ -2961,7 +2958,7 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 
 </details>
 
-### 8. Additional / alternative casting cost dropped  (208 cards)
+### 8. Additional / alternative casting cost dropped  (207 cards)
 
 **Signature.** Spell ability cost is null; an 'As an additional cost' / 'rather than pay its mana cost' / pitch / disjunctive cost clause is not parsed onto the ability.
 
@@ -3019,7 +3016,6 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 - Eliminate the Competition
 - Emberwilde Djinn
 - Ensnare
-- Erase (Not the Urza's Legacy One)
 - Erosion
 - Eumidian Lifeseed
 - Eviscerator's Insight
@@ -3870,7 +3866,7 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 
 </details>
 
-### 13. State/game-state condition → StaticCondition::Unrecognized  (127 cards)
+### 13. State/game-state condition → StaticCondition::Unrecognized  (126 cards)
 
 **Signature.** A parseable game-state predicate falls to StaticCondition::Unrecognized (evaluates permissively true) instead of a typed presence/combat/counter/comparison condition.
 
@@ -3894,7 +3890,6 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 - Captain America, Super-Soldier
 - Chained Throatseeker
 - Chittering Illuminator
-- Cobra Trap
 - Cocoon
 - Command of Unsummoning
 - Confront the Assault
